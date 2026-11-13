@@ -325,9 +325,8 @@ MoonTV 支持标准的苹果 CMS V10 API 格式。
 ## 致谢
 
 - [ts-nextjs-tailwind-starter](https://github.com/theodorusclarence/ts-nextjs-tailwind-starter) — 项目最初基于该脚手架。
-- MoonTV — 由此启发并基于其代码构建，再次站在巨人的肩膀上。
-- LunaTV & MoonTVPlus — 聚合搜索并发容错与播放源测速改进思路参考。
+- [MoonTV](https://github.com/samqin123/MoonTV) — 由此启发，再次站在巨人的肩膀上。
 - [LibreTV](https://github.com/LibreSpark/LibreTV) — 由此启发，站在巨人的肩膀上。
-- [ArtPlayer](https://github.com/zhw2590582/ArtPlayer) — 提供强大的网页视频播放器。
-- [HLS.js](https://github.com/video-dev/hls.js) — 实现 HLS 流媒体在浏览器中的播放支持。
+- [ArtPlayer](https://github.com/zhw2590582/artplayer) — 提供强大的网页视频播放器。
+- [HLS.js](https://github.com/video-dev/hls.js/) — 实现 HLS 流媒体在浏览器中的播放支持。
 - 感谢所有提供免费影视接口的站点。
