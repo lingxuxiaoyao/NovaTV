@@ -1,10 +1,10 @@
-# MoonTV
+# NovaTV
 
 <div align="center">
   <img src="public/logo.png" alt="LibreTV Logo" width="120">
 </div>
 
-> 🎬 **MoonTV** 是一个开箱即用的、跨平台的影视聚合播放器。它基于 **Next.js 14** + **Tailwind&nbsp;CSS** + **TypeScript** 构建，支持多资源搜索、在线播放、收藏同步、播放记录、本地/云端存储，让你可以随时随地畅享海量免费影视内容。
+> 🎬 **NovaTV** 是一个开箱即用的、跨平台的影视聚合播放器。它基于 **Next.js 14** + **Tailwind&nbsp;CSS** + **TypeScript** 构建，支持多资源搜索、在线播放、收藏同步、播放记录、本地/云端存储，让你可以随时随地畅享海量免费影视内容。
 
 <div align="center">
 
@@ -28,7 +28,10 @@
 - 🌗 **响应式布局**：桌面侧边栏 + 移动底部导航，自适应各种屏幕尺寸。
 - 🚀 **极简部署**：一条 Docker 命令即可将完整服务跑起来，或免费部署到 Vercel 和 Cloudflare。
 - 👿 **智能去广告**：自动跳过视频中的切片广告（实验性）
-
+- 🔐 **鉴权安全加固**：引入基于 Web Crypto API 的 HMAC-SHA256 签名校验与常量时间防计时攻击比对。
+- ⚡ **单源超时隔离与测速排序**：聚合搜索与详情接口支持单源独立超时控制与 `Promise.allSettled` 容错隔离，并按资源站响应延迟从快到慢排序。
+- 🚀 **M3U8 并发测速与安全进度同步**：新增 M3U8 首包并发测速模块与消除闭包陈旧状态的 `useSafePlayHistory` 播放进度同步 Hook。
+- 
 <details>
   <summary>点击查看项目截图</summary>
   <img src="public/screenshot1.png" alt="项目截图" style="max-width:600px">
@@ -322,6 +325,8 @@ MoonTV 支持标准的苹果 CMS V10 API 格式。
 ## 致谢
 
 - [ts-nextjs-tailwind-starter](https://github.com/theodorusclarence/ts-nextjs-tailwind-starter) — 项目最初基于该脚手架。
+- MoonTV — 由此启发并基于其代码构建，再次站在巨人的肩膀上。
+- LunaTV & MoonTVPlus — 聚合搜索并发容错与播放源测速改进思路参考。
 - [LibreTV](https://github.com/LibreSpark/LibreTV) — 由此启发，站在巨人的肩膀上。
 - [ArtPlayer](https://github.com/zhw2590582/ArtPlayer) — 提供强大的网页视频播放器。
 - [HLS.js](https://github.com/video-dev/hls.js) — 实现 HLS 流媒体在浏览器中的播放支持。
