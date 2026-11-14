@@ -1,10 +1,10 @@
-# NovaTV
+# 🎬 NovaTV — 跨平台开源影视聚合播放器
 
 <div align="center">
   <img src="public/logo.png" alt="LibreTV Logo" width="120">
 </div>
 
-> 🎬 **NovaTV** 是一个开箱即用的、跨平台的影视聚合播放器。它基于 **Next.js 14** + **Tailwind&nbsp;CSS** + **TypeScript** 构建，支持多资源搜索、在线播放、收藏同步、播放记录、本地/云端存储，让你可以随时随地畅享海量免费影视内容。
+> **NovaTV** 是基于 MoonTV 深度优化的跨平台在线影视聚合播放器，基于 **Next.js 14 + Tailwind CSS + TypeScript** 构建。支持**苹果CMS (MacCMS V10) 多源聚合搜索**、**M3U8 播放源自动并发测速换源**、**HLS.js + ArtPlayer 在线流畅播放**、**切片广告智能跳过**以及**跨设备播放进度与收藏同步**（支持 LocalStorage、Redis、Upstash 与 Cloudflare D1 数据库），可通过 **Docker**、**Vercel** 或 **Cloudflare Pages** 一键免费部署。
 
 <div align="center">
 
