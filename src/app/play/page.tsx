@@ -6,7 +6,7 @@ import Artplayer from 'artplayer';
 import Hls from 'hls.js';
 import { Heart } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   deleteFavorite,
@@ -21,9 +21,12 @@ import {
   saveSkipConfig,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { probeM3u8Latency } from '@/lib/sourceSpeedTest';
 import { SearchResult } from '@/lib/types';
 import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
+import useSafePlayHistory from '@/hooks/useSafePlayHistory';
 
+import CommentSection from '@/components/CommentSection';
 import EpisodeSelector from '@/components/EpisodeSelector';
 import PageLayout from '@/components/PageLayout';
 
@@ -187,9 +190,14 @@ function PlayPageClient() {
     'initing' | 'sourceChanging'
   >('initing');
 
-  // 播放进度保存相关
-  const saveIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const lastSaveTimeRef = useRef<number>(0);
+  // 播放进度保存相关:使用 useSafePlayHistory 统一管理
+  // 节流间隔与原逻辑一致:d1 慢(10s)、upstash 更慢(20s)、其余 5s
+  const progressThrottleMs =
+    process.env.NEXT_PUBLIC_STORAGE_TYPE === 'd1'
+      ? 10000
+      : process.env.NEXT_PUBLIC_STORAGE_TYPE === 'upstash'
+      ? 20000
+      : 5000;
 
   const artPlayerRef = useRef<any>(null);
   const artRef = useRef<HTMLDivElement | null>(null);
@@ -204,15 +212,43 @@ function PlayPageClient() {
   ): Promise<SearchResult> => {
     if (sources.length === 1) return sources[0];
 
+    // 第一阶段：M3U8 首包测速预筛，3秒内无响应的失效源直接淘汰，
+    // 避免让它们进入耗时的分辨率/网速完整测速阶段
+    setLoadingMessage('⚡ 正在快速筛选播放源...');
+    const preResults = await Promise.all(
+      sources.map(async (source) => {
+        const episodeUrl =
+          source.episodes && source.episodes.length > 0
+            ? source.episodes.length > 1
+              ? source.episodes[1]
+              : source.episodes[0]
+            : '';
+        const latency = await probeM3u8Latency(episodeUrl, 3000);
+        return { source, latency };
+      })
+    );
+    const aliveSources = preResults
+      .filter((r) => r.latency !== Infinity)
+      .sort((a, b) => a.latency - b.latency)
+      .map((r) => r.source);
+    console.log(
+      `首包测速完成: ${aliveSources.length}/${sources.length} 个源存活`
+    );
+
+    // 全部预筛失败时回退到完整测速（保守策略，避免误杀）
+    const pool = aliveSources.length > 0 ? aliveSources : sources;
+
+    setLoadingMessage('⚡ 正在优选最佳播放源...');
+
     // 将播放源均分为两批，并发测速各批，避免一次性过多请求
-    const batchSize = Math.ceil(sources.length / 2);
+    const batchSize = Math.ceil(pool.length / 2);
     const allResults: Array<{
       source: SearchResult;
       testResult: { quality: string; loadSpeed: string; pingTime: number };
     } | null> = [];
 
-    for (let start = 0; start < sources.length; start += batchSize) {
-      const batchSources = sources.slice(start, start + batchSize);
+    for (let start = 0; start < pool.length; start += batchSize) {
+      const batchSources = pool.slice(start, start + batchSize);
       const batchResults = await Promise.all(
         batchSources.map(async (source) => {
           try {
@@ -1015,29 +1051,31 @@ function PlayPageClient() {
   // ---------------------------------------------------------------------------
   // 播放记录相关
   // ---------------------------------------------------------------------------
-  // 保存播放进度
-  const saveCurrentPlayProgress = async () => {
+  // 构建当前播放进度载荷（全部读取 ref，彻底避免闭包陈旧状态）
+  const buildProgressPayload = useCallback(() => {
+    const player = artPlayerRef.current;
     if (
-      !artPlayerRef.current ||
+      !player ||
       !currentSourceRef.current ||
       !currentIdRef.current ||
       !videoTitleRef.current ||
       !detailRef.current?.source_name
     ) {
-      return;
+      return null;
     }
 
-    const player = artPlayerRef.current;
     const currentTime = player.currentTime || 0;
     const duration = player.duration || 0;
 
-    // 如果播放时间太短（少于5秒）或者视频时长无效，不保存
+    // 如果播放时间太短（少于1秒）或者视频时长无效，不保存
     if (currentTime < 1 || !duration) {
-      return;
+      return null;
     }
 
-    try {
-      await savePlayRecord(currentSourceRef.current, currentIdRef.current, {
+    return {
+      source: currentSourceRef.current,
+      id: currentIdRef.current,
+      record: {
         title: videoTitleRef.current,
         source_name: detailRef.current?.source_name || '',
         year: detailRef.current?.year,
@@ -1048,52 +1086,50 @@ function PlayPageClient() {
         total_time: Math.floor(duration),
         save_time: Date.now(),
         search_title: searchTitle,
-      });
+      },
+    };
+  }, [searchTitle]);
 
-      lastSaveTimeRef.current = Date.now();
-      console.log('播放进度已保存:', {
-        title: videoTitleRef.current,
-        episode: currentEpisodeIndexRef.current + 1,
-        year: detailRef.current?.year,
-        progress: `${Math.floor(currentTime)}/${Math.floor(duration)}`,
-      });
-    } catch (err) {
-      console.error('保存播放进度失败:', err);
-    }
+  // 通过 useSafePlayHistory 管理进度保存：
+  // 内部用 ref 持有最新载荷，按 progressThrottleMs 节流保存，
+  // 页面隐藏（visibilitychange）与组件卸载时自动落盘
+  const { updatePayload: updatePlayHistoryPayload, flush: flushPlayHistory } =
+    useSafePlayHistory(async (payload: any) => {
+      try {
+        await savePlayRecord(payload.source, payload.id, payload.record);
+        console.log('播放进度已保存:', {
+          title: payload.record.title,
+          episode: payload.record.index,
+          progress: `${payload.record.play_time}/${payload.record.total_time}`,
+        });
+      } catch (err) {
+        console.error('保存播放进度失败:', err);
+      }
+    }, progressThrottleMs);
+
+  // 立即保存当前进度（换集/暂停等场景）
+  const saveCurrentPlayProgress = async () => {
+    const payload = buildProgressPayload();
+    if (!payload) return;
+    updatePlayHistoryPayload(payload);
+    await flushPlayHistory();
   };
 
+  // 页面即将卸载时保存播放进度（页面隐藏的自动保存由 hook 内部处理）
   useEffect(() => {
-    // 页面即将卸载时保存播放进度
     const handleBeforeUnload = () => {
-      saveCurrentPlayProgress();
-    };
-
-    // 页面可见性变化时保存播放进度
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        saveCurrentPlayProgress();
+      const payload = buildProgressPayload();
+      if (payload) {
+        updatePlayHistoryPayload(payload);
+        flushPlayHistory();
       }
     };
 
-    // 添加事件监听器
     window.addEventListener('beforeunload', handleBeforeUnload);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
     return () => {
-      // 清理事件监听器
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [currentEpisodeIndex, detail, artPlayerRef.current]);
-
-  // 清理定时器
-  useEffect(() => {
-    return () => {
-      if (saveIntervalRef.current) {
-        clearInterval(saveIntervalRef.current);
-      }
-    };
-  }, []);
+  }, [buildProgressPayload, updatePlayHistoryPayload, flushPlayHistory]);
 
   // ---------------------------------------------------------------------------
   // 收藏相关
@@ -1541,17 +1577,10 @@ function PlayPageClient() {
       });
 
       artPlayerRef.current.on('video:timeupdate', () => {
-        const now = Date.now();
-        let interval = 5000;
-        if (process.env.NEXT_PUBLIC_STORAGE_TYPE === 'd1') {
-          interval = 10000;
-        }
-        if (process.env.NEXT_PUBLIC_STORAGE_TYPE === 'upstash') {
-          interval = 20000;
-        }
-        if (now - lastSaveTimeRef.current > interval) {
-          saveCurrentPlayProgress();
-          lastSaveTimeRef.current = now;
+        // 进度保存交给 useSafePlayHistory:内部用 ref 持有最新载荷并节流落盘
+        const payload = buildProgressPayload();
+        if (payload) {
+          updatePlayHistoryPayload(payload);
         }
       });
 
@@ -1570,15 +1599,6 @@ function PlayPageClient() {
       setError('播放器初始化失败');
     }
   }, [Artplayer, Hls, videoUrl, loading, blockAdEnabled]);
-
-  // 当组件卸载时清理定时器
-  useEffect(() => {
-    return () => {
-      if (saveIntervalRef.current) {
-        clearInterval(saveIntervalRef.current);
-      }
-    };
-  }, []);
 
   if (loading) {
     return (
@@ -1948,6 +1968,15 @@ function PlayPageClient() {
             </div>
           </div>
         </div>
+
+        {/* 评论区 */}
+        {videoTitle && (
+          <CommentSection
+            title={videoTitle}
+            year={detail?.year || videoYear || ''}
+            episodeIndex={currentEpisodeIndex + 1}
+          />
+        )}
       </div>
     </PageLayout>
   );
