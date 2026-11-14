@@ -2,7 +2,7 @@
 
 'use client';
 
-const CURRENT_VERSION = '20250804231933';
+const CURRENT_VERSION = '20261114105101';
 
 // 版本检查结果枚举
 export enum UpdateStatus {
@@ -11,10 +11,10 @@ export enum UpdateStatus {
   FETCH_FAILED = 'fetch_failed', // 获取失败
 }
 
-// 远程版本检查URL配置
+// 远程版本检查URL配置（指向本项目自己的仓库，避免误报上游 MoonTV 的新版本）
 const VERSION_CHECK_URLS = [
-  'https://ghfast.top/raw.githubusercontent.com/senshinya/MoonTV/main/VERSION.txt',
-  'https://raw.githubusercontent.com/senshinya/MoonTV/main/VERSION.txt',
+  'https://ghfast.top/raw.githubusercontent.com/lingxuxiaoyao/NovaTV/main/VERSION.txt',
+  'https://raw.githubusercontent.com/lingxuxiaoyao/NovaTV/main/VERSION.txt',
 ];
 
 /**
