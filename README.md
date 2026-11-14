@@ -31,7 +31,7 @@
 - 🔐 **鉴权安全加固**：引入基于 Web Crypto API 的 HMAC-SHA256 签名校验与常量时间防计时攻击比对。
 - ⚡ **单源超时隔离与测速排序**：聚合搜索与详情接口支持单源独立超时控制与 `Promise.allSettled` 容错隔离，并按资源站响应延迟从快到慢排序。
 - 🚀 **M3U8 并发测速与安全进度同步**：新增 M3U8 首包并发测速模块与消除闭包陈旧状态的 `useSafePlayHistory` 播放进度同步 Hook。
-- 
+
 <details>
   <summary>点击查看项目截图</summary>
   <img src="public/screenshot1.png" alt="项目截图" style="max-width:600px">
@@ -135,11 +135,11 @@
 
 ```bash
 # 拉取预构建镜像
-docker pull ghcr.io/senshinya/moontv:latest
+docker pull ghcr.io/lingxuxiaoyao/novatv:latest
 
 # 运行容器
 # -d: 后台运行  -p: 映射端口 3000 -> 3000
-docker run -d --name moontv -p 3000:3000 --env PASSWORD=your_password ghcr.io/senshinya/moontv:latest
+docker run -d --name novatv -p 3000:3000 --env PASSWORD=your_password ghcr.io/lingxuxiaoyao/novatv:latest
 ```
 
 访问 `http://服务器 IP:3000` 即可。（需自行到服务器控制台放通 `3000` 端口）
@@ -152,9 +152,9 @@ docker run -d --name moontv -p 3000:3000 --env PASSWORD=your_password ghcr.io/se
 
 ```yaml
 services:
-  moontv:
-    image: ghcr.io/lingxuxiaoyao/moontv:latest
-    container_name: moontv
+  novatv:
+    image: ghcr.io/lingxuxiaoyao/novatv:latest
+    container_name: novatv
     restart: unless-stopped
     ports:
       - '3000:3000'
@@ -169,9 +169,9 @@ services:
 
 ```yaml
 services:
-  moontv-core:
-    image: ghcr.io/lingxuxiaoyao/moontv:latest
-    container_name: moontv
+  novatv-core:
+    image: ghcr.io/lingxuxiaoyao/novatv:latest
+    container_name: novatv
     restart: unless-stopped
     ports:
       - '3000:3000'
@@ -179,26 +179,26 @@ services:
       - USERNAME=admin
       - PASSWORD=admin_password
       - NEXT_PUBLIC_STORAGE_TYPE=redis
-      - REDIS_URL=redis://moontv-redis:6379
+      - REDIS_URL=redis://novatv-redis:6379
       - NEXT_PUBLIC_ENABLE_REGISTER=true
     networks:
-      - moontv-network
+      - novatv-network
     depends_on:
-      - moontv-redis
+      - novatv-redis
     # 如需自定义配置，可挂载文件
     # volumes:
     #   - ./config.json:/app/config.json:ro
-  moontv-redis:
+  novatv-redis:
     image: redis
-    container_name: moontv-redis
+    container_name: novatv-redis
     restart: unless-stopped
     networks:
-      - moontv-network
+      - novatv-network
     # 如需持久化
     # volumes:
     #   - ./data:/data
 networks:
-  moontv-network:
+  novatv-network:
     driver: bridge
 ```
 
@@ -210,21 +210,22 @@ networks:
 
 ## 环境变量
 
-| 变量                              | 说明                                         | 可选值                           | 默认值                                                                                                                     |
-| --------------------------------- | -------------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| USERNAME                          | 非 localstorage 部署时的管理员账号           | 任意字符串                       | （空）                                                                                                                     |
-| PASSWORD                          | 非 localstorage 部署时为管理员密码           | 任意字符串                       | （空）                                                                                                                     |
-| SITE_NAME                         | 站点名称                                     | 任意字符串                       | MoonTV                                                                                                                     |
-| ANNOUNCEMENT                      | 站点公告                                     | 任意字符串                       | 本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。 |
-| NEXT_PUBLIC_STORAGE_TYPE          | 播放记录/收藏的存储方式                      | localstorage、redis、d1、upstash | localstorage                                                                                                               |
-| REDIS_URL                         | redis 连接 url                               | 连接 url                         | 空                                                                                                                         |
-| UPSTASH_URL                       | upstash redis 连接 url                       | 连接 url                         | 空                                                                                                                         |
-| UPSTASH_TOKEN                     | upstash redis 连接 token                     | 连接 token                       | 空                                                                                                                         |
-| NEXT_PUBLIC_ENABLE_REGISTER       | 是否开放注册，仅在非 localstorage 部署时生效 | true / false                     | false                                                                                                                      |
-| NEXT_PUBLIC_SEARCH_MAX_PAGE       | 搜索接口可拉取的最大页数                     | 1-50                             | 5                                                                                                                          |
-| NEXT_PUBLIC_IMAGE_PROXY           | 默认的浏览器端图片代理                       | url prefix                       | (空)                                                                                                                       |
-| NEXT_PUBLIC_DOUBAN_PROXY          | 默认的浏览器端豆瓣数据代理                   | url prefix                       | (空)                                                                                                                       |
-| NEXT_PUBLIC_DISABLE_YELLOW_FILTER | 关闭色情内容过滤                             | true/false                       | false                                                                                                                      |
+| 变量                              | 说明                                             | 可选值                           | 默认值                                                                                                                     |
+| --------------------------------- | ------------------------------------------------ | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| USERNAME                          | 非 localstorage 部署时的管理员账号               | 任意字符串                       | （空）                                                                                                                     |
+| PASSWORD                          | 非 localstorage 部署时为管理员密码               | 任意字符串                       | （空）                                                                                                                     |
+| SITE_NAME                         | 站点名称                                         | 任意字符串                       | NovaTV                                                                                                                     |
+| ANNOUNCEMENT                      | 站点公告                                         | 任意字符串                       | 本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。 |
+| NEXT_PUBLIC_STORAGE_TYPE          | 播放记录/收藏的存储方式                          | localstorage、redis、d1、upstash | localstorage                                                                                                               |
+| REDIS_URL                         | redis 连接 url                                   | 连接 url                         | 空                                                                                                                         |
+| UPSTASH_URL                       | upstash redis 连接 url                           | 连接 url                         | 空                                                                                                                         |
+| UPSTASH_TOKEN                     | upstash redis 连接 token                         | 连接 token                       | 空                                                                                                                         |
+| NEXT_PUBLIC_ENABLE_REGISTER       | 是否开放注册，仅在非 localstorage 部署时生效     | true / false                     | false                                                                                                                      |
+| NEXT_PUBLIC_SEARCH_MAX_PAGE       | 搜索接口可拉取的最大页数                         | 1-50                             | 5                                                                                                                          |
+| NEXT_PUBLIC_IMAGE_PROXY           | 默认的浏览器端图片代理                           | url prefix                       | (空)                                                                                                                       |
+| NEXT_PUBLIC_DOUBAN_PROXY          | 默认的浏览器端豆瓣数据代理                       | url prefix                       | (空)                                                                                                                       |
+| NEXT_PUBLIC_DISABLE_YELLOW_FILTER | 关闭色情内容过滤                                 | true/false                       | false                                                                                                                      |
+| SESSION_DEVICE_LIMIT              | 同一账号最大登录设备数，超出时最早的设备登录失效 | 0 或正整数（0 = 不限制）         | 3                                                                                                                          |
 
 ## 配置说明
 
@@ -269,7 +270,7 @@ custom_category 支持的自定义分类已知如下：
 
 也可输入如 "哈利波特" 效果等同于豆瓣搜索
 
-MoonTV 支持标准的苹果 CMS V10 API 格式。
+NovaTV 支持标准的苹果 CMS V10 API 格式。
 
 修改后 **无需重新构建**，服务会在启动时读取一次。
 
