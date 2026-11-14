@@ -25,6 +25,44 @@ export interface Favorite {
   search_title: string; // 搜索时使用的标题
 }
 
+// 用户访问记录
+export interface UserAccessRecord {
+  login_time: number; // 上线时间（登录时间戳，秒）
+  ip: string; // 访问 IP
+  last_active: number; // 最近活跃时间戳（秒）
+}
+
+// 用户访问统计汇总
+export interface UserAccessSummary {
+  logs: UserAccessRecord[]; // 最近访问记录（最多10条，新的在前）
+  usage_total: number; // 累计使用时长（秒）
+}
+
+// 登录设备会话信息
+export interface DeviceSessionInfo {
+  device_id: string; // 设备唯一标识（浏览器持久化）
+  ua: string; // 设备描述（由 User-Agent 解析，如 "Windows · Chrome"）
+  session_time: number; // 最近登录时间戳（毫秒）
+}
+
+// 视频评论（整部作品一个评论区，键为归一化「标题|年份」）
+export interface VideoComment {
+  id: string; // 评论唯一ID
+  username: string; // 评论人（本地存储模式为“我”）
+  video_key: string; // 归一化作品键（buildCommentKey 生成）
+  episode_index?: number; // 评论时所在的集数（1 基，可选）
+  content: string; // 评论内容（≤500 字）
+  created_at: number; // 评论时间戳（秒）
+  role?: 'owner' | 'admin' | 'user'; // 评论人角色（仅接口返回时富化，不入库）
+}
+
+// 视频评论分页结果
+export interface VideoCommentList {
+  comments: VideoComment[];
+  total: number;
+  has_more: boolean;
+}
+
 // 存储接口
 export interface IStorage {
   // 播放记录相关
@@ -79,6 +117,50 @@ export interface IStorage {
   ): Promise<void>;
   deleteSkipConfig(userName: string, source: string, id: string): Promise<void>;
   getAllSkipConfigs(userName: string): Promise<{ [key: string]: SkipConfig }>;
+
+  // 用户访问记录相关（用于管理界面的使用时长/上线时间/IP统计）
+  // 记录一次上线（登录），自动只保留最近 10 条
+  saveUserAccess(userName: string, record: UserAccessRecord): Promise<void>;
+  // 心跳更新最近活跃时间并累计使用时长
+  updateUserActivity(userName: string, nowSeconds: number): Promise<void>;
+  // 读取访问统计（最近10条记录 + 累计使用秒数）
+  getUserAccessSummary(userName: string): Promise<UserAccessSummary>;
+
+  // 登录设备会话管理（限制同账号并发登录设备数）
+  // 以 deviceId 标识一台设备；重复登录时原地更新该设备的会话时间，不额外占名额；
+  // 设备数超过上限时自动淘汰最早登录的设备
+  saveUserSession(
+    userName: string,
+    timestampMs: number,
+    deviceId?: string,
+    ua?: string
+  ): Promise<void>;
+  // 校验某次登录的会话是否仍有效（设备未超限被挤下线）
+  // deviceId 缺省（旧cookie未登记设备）视为失效，重新登录即可恢复
+  hasUserSession(
+    userName: string,
+    timestampMs: number,
+    deviceId?: string
+  ): Promise<boolean>;
+  // 读取用户的全部登录设备（按最近登录时间倒序），供管理界面展示
+  getUserDevices(userName: string): Promise<DeviceSessionInfo[]>;
+
+  // 视频评论相关（评论区键为归一化「标题|年份」，见 buildCommentKey）
+  // 分页读取某作品评论（新的在前）
+  getVideoComments(
+    videoKey: string,
+    page: number,
+    pageSize: number
+  ): Promise<VideoCommentList>;
+  // 读取单条评论（删除前的属主判断用）
+  getVideoComment(
+    videoKey: string,
+    commentId: string
+  ): Promise<VideoComment | null>;
+  // 保存评论（comment.id/username/created_at 已由接口层生成）
+  saveVideoComment(videoKey: string, comment: VideoComment): Promise<void>;
+  // 删除评论
+  deleteVideoComment(videoKey: string, commentId: string): Promise<void>;
 }
 
 // 搜索结果数据结构

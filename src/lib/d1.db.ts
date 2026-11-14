@@ -1,7 +1,18 @@
 /* eslint-disable no-console, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */
 
 import { AdminConfig } from './admin.types';
-import { Favorite, IStorage, PlayRecord, SkipConfig } from './types';
+import { MAX_COMMENTS_PER_VIDEO } from './comment';
+import {
+  DeviceSessionInfo,
+  Favorite,
+  IStorage,
+  PlayRecord,
+  SkipConfig,
+  UserAccessRecord,
+  UserAccessSummary,
+  VideoComment,
+  VideoCommentList,
+} from './types';
 
 // 搜索历史最大条数
 const SEARCH_HISTORY_LIMIT = 20;
@@ -328,6 +339,349 @@ export class D1Storage implements IStorage {
     }
   }
 
+  // ---------- 用户访问记录 ----------
+  async saveUserAccess(
+    userName: string,
+    record: UserAccessRecord
+  ): Promise<void> {
+    try {
+      const db = await this.getDatabase();
+      await db
+        .prepare(
+          `INSERT OR REPLACE INTO user_access_logs (username, login_time, ip, last_active)
+           VALUES (?, ?, ?, ?)`
+        )
+        .bind(userName, record.login_time, record.ip, record.last_active)
+        .run();
+
+      // 只保留最近 10 条
+      await db
+        .prepare(
+          `DELETE FROM user_access_logs
+           WHERE username = ? AND login_time NOT IN (
+             SELECT login_time FROM user_access_logs
+             WHERE username = ?
+             ORDER BY login_time DESC
+             LIMIT 10
+           )`
+        )
+        .bind(userName, userName)
+        .run();
+    } catch (err) {
+      console.error('Failed to save user access:', err);
+      throw err;
+    }
+  }
+
+  async updateUserActivity(
+    userName: string,
+    nowSeconds: number
+  ): Promise<void> {
+    try {
+      const db = await this.getDatabase();
+      const result = await db
+        .prepare(
+          `SELECT id, last_active FROM user_access_logs
+           WHERE username = ? ORDER BY login_time DESC LIMIT 1`
+        )
+        .bind(userName)
+        .first<any>();
+
+      if (!result) return;
+
+      const delta = Math.min(Math.max(nowSeconds - result.last_active, 0), 180);
+      if (delta > 1) {
+        // 累计使用时长（心跳间隔上限180秒，防止时间偏差导致虚增）
+        await db
+          .prepare(
+            `INSERT INTO user_usage (username, usage_seconds) VALUES (?, ?)
+             ON CONFLICT(username) DO UPDATE SET
+             usage_seconds = usage_seconds + excluded.usage_seconds`
+          )
+          .bind(userName, Math.round(delta))
+          .run();
+      }
+
+      await db
+        .prepare('UPDATE user_access_logs SET last_active = ? WHERE id = ?')
+        .bind(nowSeconds, result.id)
+        .run();
+    } catch (err) {
+      console.error('Failed to update user activity:', err);
+      throw err;
+    }
+  }
+
+  async getUserAccessSummary(userName: string): Promise<UserAccessSummary> {
+    try {
+      const db = await this.getDatabase();
+      const accessResult = await db
+        .prepare(
+          `SELECT login_time, ip, last_active FROM user_access_logs
+           WHERE username = ? ORDER BY login_time DESC LIMIT 10`
+        )
+        .bind(userName)
+        .all<any>();
+
+      const logs: UserAccessRecord[] = (accessResult.results || []).map(
+        (row) => ({
+          login_time: row.login_time,
+          ip: row.ip,
+          last_active: row.last_active,
+        })
+      );
+
+      const usageResult = await db
+        .prepare('SELECT usage_seconds FROM user_usage WHERE username = ?')
+        .bind(userName)
+        .first<{ usage_seconds: number }>();
+
+      return {
+        logs,
+        usage_total: usageResult?.usage_seconds || 0,
+      };
+    } catch (err) {
+      console.error('Failed to get user access summary:', err);
+      throw err;
+    }
+  }
+
+  // ---------- 登录设备会话 ----------
+  private getDeviceLimit(): number {
+    const limit = parseInt(process.env.SESSION_DEVICE_LIMIT || '3', 10);
+    return isNaN(limit) || limit < 1 ? 3 : limit;
+  }
+
+  async saveUserSession(
+    userName: string,
+    timestampMs: number,
+    deviceId?: string,
+    ua?: string
+  ): Promise<void> {
+    if (!deviceId) return; // 无设备标识不登记（不占设备名额）
+
+    try {
+      const db = await this.getDatabase();
+      // 同一设备重复登录：原地更新会话时间与设备描述，不额外占名额
+      await db
+        .prepare(
+          `INSERT OR REPLACE INTO user_sessions (username, device_id, session_time, ua)
+           VALUES (?, ?, ?, ?)`
+        )
+        .bind(userName, deviceId, timestampMs, ua || '')
+        .run();
+
+      // 超过设备上限时，最早登录的设备被挤出（其登录cookie随即失效）
+      await db
+        .prepare(
+          `DELETE FROM user_sessions
+           WHERE username = ? AND device_id NOT IN (
+             SELECT device_id FROM user_sessions
+             WHERE username = ?
+             ORDER BY session_time DESC
+             LIMIT ?
+           )`
+        )
+        .bind(userName, userName, this.getDeviceLimit())
+        .run();
+    } catch (err) {
+      console.error('Failed to save user session:', err);
+      throw err;
+    }
+  }
+
+  async hasUserSession(
+    userName: string,
+    timestampMs: number,
+    deviceId?: string
+  ): Promise<boolean> {
+    if (!deviceId) return false; // 无设备标识的旧cookie视为失效，重新登录即可恢复
+
+    try {
+      const db = await this.getDatabase();
+      const limit = this.getDeviceLimit();
+
+      // 该设备当前登记的会话信息
+      const rows = await db
+        .prepare(
+          'SELECT session_time FROM user_sessions WHERE username = ? AND device_id = ?'
+        )
+        .bind(userName, deviceId)
+        .all<any>();
+      const row = (rows.results || [])[0];
+      if (!row) return false; // 设备已被挤出或未登记
+      if (Number(row.session_time) !== timestampMs) return false; // 该设备已在别处重新登录，旧cookie失效
+
+      // 检查是否仍在上限名额内（按最近登录时间排名，比它新的设备数 < 上限）
+      const rankRows = await db
+        .prepare(
+          'SELECT COUNT(*) AS cnt FROM user_sessions WHERE username = ? AND session_time > ?'
+        )
+        .bind(userName, Number(row.session_time))
+        .all<any>();
+      const rank = Number((rankRows.results || [])[0]?.cnt || 0);
+      return rank < limit;
+    } catch (err) {
+      console.error('Failed to check user session:', err);
+      throw err;
+    }
+  }
+
+  async getUserDevices(userName: string): Promise<DeviceSessionInfo[]> {
+    try {
+      const db = await this.getDatabase();
+      const result = await db
+        .prepare(
+          `SELECT device_id, ua, session_time FROM user_sessions
+           WHERE username = ?
+           ORDER BY session_time DESC`
+        )
+        .bind(userName)
+        .all<any>();
+
+      return (result.results || []).map((row) => ({
+        device_id: String(row.device_id),
+        ua: row.ua || '未知设备',
+        session_time: Number(row.session_time),
+      }));
+    } catch (err) {
+      console.error('Failed to get user devices:', err);
+      return [];
+    }
+  }
+
+  // ---------- 视频评论 ----------
+  async getVideoComments(
+    videoKey: string,
+    page: number,
+    pageSize: number
+  ): Promise<VideoCommentList> {
+    try {
+      const db = await this.getDatabase();
+
+      const countRows = await db
+        .prepare(
+          'SELECT COUNT(*) AS cnt FROM video_comments WHERE video_key = ?'
+        )
+        .bind(videoKey)
+        .all<any>();
+      const total = Number((countRows.results || [])[0]?.cnt || 0);
+
+      const start = (page - 1) * pageSize;
+      const rows = await db
+        .prepare(
+          `SELECT id, username, video_key, episode_index, content, created_at
+           FROM video_comments
+           WHERE video_key = ?
+           ORDER BY created_at DESC
+           LIMIT ? OFFSET ?`
+        )
+        .bind(videoKey, pageSize, start)
+        .all<any>();
+
+      const comments = (rows.results || []).map((row) => ({
+        id: String(row.id),
+        username: String(row.username),
+        video_key: String(row.video_key),
+        episode_index:
+          row.episode_index === null || row.episode_index === undefined
+            ? undefined
+            : Number(row.episode_index),
+        content: String(row.content),
+        created_at: Number(row.created_at),
+      }));
+
+      return { comments, total, has_more: start + comments.length < total };
+    } catch (err) {
+      console.error('Failed to get video comments:', err);
+      throw err;
+    }
+  }
+
+  async getVideoComment(
+    videoKey: string,
+    commentId: string
+  ): Promise<VideoComment | null> {
+    try {
+      const db = await this.getDatabase();
+      const rows = await db
+        .prepare(
+          'SELECT id, username, video_key, episode_index, content, created_at FROM video_comments WHERE video_key = ? AND id = ?'
+        )
+        .bind(videoKey, commentId)
+        .all<any>();
+      const row = (rows.results || [])[0];
+      if (!row) return null;
+      return {
+        id: String(row.id),
+        username: String(row.username),
+        video_key: String(row.video_key),
+        episode_index:
+          row.episode_index === null || row.episode_index === undefined
+            ? undefined
+            : Number(row.episode_index),
+        content: String(row.content),
+        created_at: Number(row.created_at),
+      };
+    } catch (err) {
+      console.error('Failed to get video comment:', err);
+      return null;
+    }
+  }
+
+  async saveVideoComment(
+    videoKey: string,
+    comment: VideoComment
+  ): Promise<void> {
+    try {
+      const db = await this.getDatabase();
+      await db
+        .prepare(
+          `INSERT INTO video_comments (id, username, video_key, episode_index, content, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          comment.id,
+          comment.username,
+          videoKey,
+          comment.episode_index ?? null,
+          comment.content,
+          comment.created_at
+        )
+        .run();
+
+      // 超过单作品上限时，淘汰最早的评论
+      await db
+        .prepare(
+          `DELETE FROM video_comments
+           WHERE video_key = ? AND id NOT IN (
+             SELECT id FROM video_comments
+             WHERE video_key = ?
+             ORDER BY created_at DESC
+             LIMIT ?
+           )`
+        )
+        .bind(videoKey, videoKey, MAX_COMMENTS_PER_VIDEO)
+        .run();
+    } catch (err) {
+      console.error('Failed to save video comment:', err);
+      throw err;
+    }
+  }
+
+  async deleteVideoComment(videoKey: string, commentId: string): Promise<void> {
+    try {
+      const db = await this.getDatabase();
+      await db
+        .prepare('DELETE FROM video_comments WHERE video_key = ? AND id = ?')
+        .bind(videoKey, commentId)
+        .run();
+    } catch (err) {
+      console.error('Failed to delete video comment:', err);
+      throw err;
+    }
+  }
+
   async deleteUser(userName: string): Promise<void> {
     try {
       const db = await this.getDatabase();
@@ -342,6 +696,13 @@ export class D1Storage implements IStorage {
           .bind(userName),
         db
           .prepare('DELETE FROM skip_configs WHERE username = ?')
+          .bind(userName),
+        db
+          .prepare('DELETE FROM user_access_logs WHERE username = ?')
+          .bind(userName),
+        db.prepare('DELETE FROM user_usage WHERE username = ?').bind(userName),
+        db
+          .prepare('DELETE FROM user_sessions WHERE username = ?')
           .bind(userName),
       ];
 
