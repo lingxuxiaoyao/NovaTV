@@ -25,12 +25,12 @@ import {
   ChevronDown,
   ChevronUp,
   FolderOpen,
+  GripVertical,
   Settings,
   Users,
   Video,
 } from 'lucide-react';
-import { GripVertical } from 'lucide-react';
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Fragment, Suspense, useCallback, useEffect, useState } from 'react';
 import Swal from 'sweetalert2';
 
 import { AdminConfig, AdminConfigResult } from '@/lib/admin.types';
@@ -140,6 +140,12 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
     username: '',
     password: '',
   });
+  // 用户访问统计：{ [username]: { logs: [...], usage_total, devices: [...] } }
+  const [accessData, setAccessData] = useState<{
+    [key: string]: { logs: any[]; usage_total: number; devices?: any[] };
+  }>({});
+  // 当前展开查看访问记录的用户
+  const [expandedUser, setExpandedUser] = useState<string | null>(null);
 
   // 当前登录用户名
   const currentUsername = getAuthInfoFromBrowserCookie()?.username || null;
@@ -159,6 +165,49 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
       });
     }
   }, [config]);
+
+  // 拉取用户访问统计（使用时长/上线时间/IP）
+  const fetchAccessData = useCallback(async () => {
+    if (!role) return;
+    try {
+      const res = await fetch('/api/admin/access');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.users) {
+        setAccessData(data.users);
+      }
+    } catch (err) {
+      console.error('获取用户访问统计失败:', err);
+    }
+  }, [role]);
+
+  useEffect(() => {
+    fetchAccessData();
+    const timer = setInterval(fetchAccessData, 60 * 1000); // 每分钟刷新
+    return () => clearInterval(timer);
+  }, [fetchAccessData]);
+
+  // 格式化使用时长
+  const formatUsageDuration = (seconds: number): string => {
+    if (!seconds || seconds <= 0) return '0 分钟';
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    if (days > 0) return `${days} 天 ${hours} 小时`;
+    if (hours > 0) return `${hours} 小时 ${minutes} 分钟`;
+    if (minutes > 0) return `${minutes} 分钟`;
+    return `${seconds} 秒`;
+  };
+
+  // 格式化时间戳为本地时间字符串
+  const formatAccessTime = (ts: number): string => {
+    if (!ts) return '-';
+    const d = new Date(ts * 1000);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(
+      d.getDate()
+    )} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
 
   // 切换允许注册设置
   const toggleAllowRegister = async (value: boolean) => {
@@ -480,6 +529,24 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                 </th>
                 <th
                   scope='col'
+                  className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'
+                >
+                  使用时长
+                </th>
+                <th
+                  scope='col'
+                  className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'
+                >
+                  最近上线
+                </th>
+                <th
+                  scope='col'
+                  className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'
+                >
+                  最近IP
+                </th>
+                <th
+                  scope='col'
                   className='px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'
                 >
                   操作
@@ -521,105 +588,262 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                       (role === 'owner' ||
                         (role === 'admin' && user.role === 'user'));
                     return (
-                      <tr
-                        key={user.username}
-                        className='hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors'
-                      >
-                        <td className='px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100'>
-                          {user.username}
-                        </td>
-                        <td className='px-6 py-4 whitespace-nowrap'>
-                          <span
-                            className={`px-2 py-1 text-xs rounded-full ${
-                              user.role === 'owner'
-                                ? 'bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300'
+                      <Fragment key={user.username}>
+                        <tr className='hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors'>
+                          <td className='px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100'>
+                            {user.username}
+                          </td>
+                          <td className='px-6 py-4 whitespace-nowrap'>
+                            <span
+                              className={`px-2 py-1 text-xs rounded-full ${
+                                user.role === 'owner'
+                                  ? 'bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300'
+                                  : user.role === 'admin'
+                                  ? 'bg-purple-100 dark:bg-purple-900/20 text-purple-800 dark:text-purple-300'
+                                  : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
+                              }`}
+                            >
+                              {user.role === 'owner'
+                                ? '站长'
                                 : user.role === 'admin'
-                                ? 'bg-purple-100 dark:bg-purple-900/20 text-purple-800 dark:text-purple-300'
-                                : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
-                            }`}
-                          >
-                            {user.role === 'owner'
-                              ? '站长'
-                              : user.role === 'admin'
-                              ? '管理员'
-                              : '普通用户'}
-                          </span>
-                        </td>
-                        <td className='px-6 py-4 whitespace-nowrap'>
-                          <span
-                            className={`px-2 py-1 text-xs rounded-full ${
-                              !user.banned
-                                ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-300'
-                                : 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-300'
-                            }`}
-                          >
-                            {!user.banned ? '正常' : '已封禁'}
-                          </span>
-                        </td>
-                        <td className='px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2'>
-                          {/* 修改密码按钮 */}
-                          {canChangePassword && (
+                                ? '管理员'
+                                : '普通用户'}
+                            </span>
+                          </td>
+                          <td className='px-6 py-4 whitespace-nowrap'>
+                            <span
+                              className={`px-2 py-1 text-xs rounded-full ${
+                                !user.banned
+                                  ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-300'
+                                  : 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-300'
+                              }`}
+                            >
+                              {!user.banned ? '正常' : '已封禁'}
+                            </span>
+                          </td>
+                          <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
+                            {formatUsageDuration(
+                              accessData[user.username]?.usage_total || 0
+                            )}
+                          </td>
+                          <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
+                            {(() => {
+                              const logs =
+                                accessData[user.username]?.logs || [];
+                              if (logs.length === 0) return '-';
+                              const latest = logs[0];
+                              return formatAccessTime(
+                                latest.last_active || latest.login_time
+                              );
+                            })()}
+                          </td>
+                          <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
+                            {accessData[user.username]?.logs?.[0]?.ip || '-'}
+                          </td>
+                          <td className='px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2'>
+                            {/* 访问记录按钮 */}
                             <button
                               onClick={() =>
-                                handleShowChangePasswordForm(user.username)
+                                setExpandedUser(
+                                  expandedUser === user.username
+                                    ? null
+                                    : user.username
+                                )
                               }
-                              className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/40 dark:hover:bg-blue-900/60 dark:text-blue-200 transition-colors'
+                              className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 hover:bg-indigo-200 dark:bg-indigo-900/40 dark:hover:bg-indigo-900/60 dark:text-indigo-200 transition-colors'
                             >
-                              修改密码
+                              {expandedUser === user.username
+                                ? '收起记录'
+                                : '访问记录'}
                             </button>
-                          )}
-                          {canOperate && (
-                            <>
-                              {/* 其他操作按钮 */}
-                              {user.role === 'user' && (
-                                <button
-                                  onClick={() => handleSetAdmin(user.username)}
-                                  className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 hover:bg-purple-200 dark:bg-purple-900/40 dark:hover:bg-purple-900/60 dark:text-purple-200 transition-colors'
-                                >
-                                  设为管理
-                                </button>
-                              )}
-                              {user.role === 'admin' && (
-                                <button
-                                  onClick={() =>
-                                    handleRemoveAdmin(user.username)
-                                  }
-                                  className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 hover:bg-gray-200 dark:bg-gray-700/40 dark:hover:bg-gray-700/60 dark:text-gray-200 transition-colors'
-                                >
-                                  取消管理
-                                </button>
-                              )}
-                              {user.role !== 'owner' &&
-                                (!user.banned ? (
-                                  <button
-                                    onClick={() => handleBanUser(user.username)}
-                                    className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:hover:bg-red-900/60 dark:text-red-300 transition-colors'
-                                  >
-                                    封禁
-                                  </button>
-                                ) : (
+                            {/* 修改密码按钮 */}
+                            {canChangePassword && (
+                              <button
+                                onClick={() =>
+                                  handleShowChangePasswordForm(user.username)
+                                }
+                                className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/40 dark:hover:bg-blue-900/60 dark:text-blue-200 transition-colors'
+                              >
+                                修改密码
+                              </button>
+                            )}
+                            {canOperate && (
+                              <>
+                                {/* 其他操作按钮 */}
+                                {user.role === 'user' && (
                                   <button
                                     onClick={() =>
-                                      handleUnbanUser(user.username)
+                                      handleSetAdmin(user.username)
                                     }
-                                    className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-900/40 dark:hover:bg-green-900/60 dark:text-green-300 transition-colors'
+                                    className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 hover:bg-purple-200 dark:bg-purple-900/40 dark:hover:bg-purple-900/60 dark:text-purple-200 transition-colors'
                                   >
-                                    解封
+                                    设为管理
                                   </button>
-                                ))}
-                            </>
-                          )}
-                          {/* 删除用户按钮 - 放在最后，使用更明显的红色样式 */}
-                          {canDeleteUser && (
-                            <button
-                              onClick={() => handleDeleteUser(user.username)}
-                              className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-red-600 text-white hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-700 transition-colors'
-                            >
-                              删除用户
-                            </button>
-                          )}
-                        </td>
-                      </tr>
+                                )}
+                                {user.role === 'admin' && (
+                                  <button
+                                    onClick={() =>
+                                      handleRemoveAdmin(user.username)
+                                    }
+                                    className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 hover:bg-gray-200 dark:bg-gray-700/40 dark:hover:bg-gray-700/60 dark:text-gray-200 transition-colors'
+                                  >
+                                    取消管理
+                                  </button>
+                                )}
+                                {user.role !== 'owner' &&
+                                  (!user.banned ? (
+                                    <button
+                                      onClick={() =>
+                                        handleBanUser(user.username)
+                                      }
+                                      className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:hover:bg-red-900/60 dark:text-red-300 transition-colors'
+                                    >
+                                      封禁
+                                    </button>
+                                  ) : (
+                                    <button
+                                      onClick={() =>
+                                        handleUnbanUser(user.username)
+                                      }
+                                      className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-900/40 dark:hover:bg-green-900/60 dark:text-green-300 transition-colors'
+                                    >
+                                      解封
+                                    </button>
+                                  ))}
+                              </>
+                            )}
+                            {/* 删除用户按钮 - 放在最后，使用更明显的红色样式 */}
+                            {canDeleteUser && (
+                              <button
+                                onClick={() => handleDeleteUser(user.username)}
+                                className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-red-600 text-white hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-700 transition-colors'
+                              >
+                                删除用户
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                        {/* 展开的访问记录详情行 */}
+                        {expandedUser === user.username && (
+                          <tr
+                            key={`${user.username}-access`}
+                            className='bg-gray-50 dark:bg-gray-900'
+                          >
+                            <td colSpan={8} className='px-6 py-4'>
+                              <div className='text-xs font-medium text-gray-500 dark:text-gray-400 mb-2'>
+                                最近访问记录（最多保留10次）
+                              </div>
+                              {(accessData[user.username]?.logs || [])
+                                .length === 0 ? (
+                                <div className='text-sm text-gray-400 dark:text-gray-500'>
+                                  暂无访问记录
+                                </div>
+                              ) : (
+                                <table className='min-w-full text-sm'>
+                                  <thead>
+                                    <tr className='text-left text-xs text-gray-500 dark:text-gray-400'>
+                                      <th className='py-1 pr-6 font-medium'>
+                                        上线时间
+                                      </th>
+                                      <th className='py-1 pr-6 font-medium'>
+                                        访问IP
+                                      </th>
+                                      <th className='py-1 pr-6 font-medium'>
+                                        本次在线时长
+                                      </th>
+                                      <th className='py-1 font-medium'>
+                                        最近活跃
+                                      </th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>
+                                    {(
+                                      accessData[user.username]?.logs || []
+                                    ).map((log, idx) => (
+                                      <tr key={idx}>
+                                        <td className='py-1.5 pr-6 text-gray-900 dark:text-gray-100'>
+                                          {formatAccessTime(log.login_time)}
+                                        </td>
+                                        <td className='py-1.5 pr-6 font-mono text-gray-900 dark:text-gray-100'>
+                                          {log.ip || '-'}
+                                        </td>
+                                        <td className='py-1.5 pr-6 text-gray-900 dark:text-gray-100'>
+                                          {formatUsageDuration(
+                                            Math.max(
+                                              0,
+                                              (log.last_active ||
+                                                log.login_time) - log.login_time
+                                            )
+                                          )}
+                                        </td>
+                                        <td className='py-1.5 text-gray-900 dark:text-gray-100'>
+                                          {formatAccessTime(log.last_active)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+
+                              {/* 登录设备列表（设备数量超限时最早登录的设备失效） */}
+                              <div className='text-xs font-medium text-gray-500 dark:text-gray-400 mt-4 mb-2'>
+                                登录设备（共{' '}
+                                {
+                                  (accessData[user.username]?.devices || [])
+                                    .length
+                                }{' '}
+                                台）
+                              </div>
+                              {(accessData[user.username]?.devices || [])
+                                .length === 0 ? (
+                                <div className='text-sm text-gray-400 dark:text-gray-500'>
+                                  暂无登录设备
+                                </div>
+                              ) : (
+                                <table className='min-w-full text-sm'>
+                                  <thead>
+                                    <tr className='text-left text-xs text-gray-500 dark:text-gray-400'>
+                                      <th className='py-1 pr-6 font-medium'>
+                                        设备
+                                      </th>
+                                      <th className='py-1 pr-6 font-medium'>
+                                        最近登录
+                                      </th>
+                                      <th className='py-1 font-medium'>
+                                        设备标识
+                                      </th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>
+                                    {(
+                                      accessData[user.username]?.devices || []
+                                    ).map((device, idx) => (
+                                      <tr key={idx}>
+                                        <td className='py-1.5 pr-6 text-gray-900 dark:text-gray-100'>
+                                          {device.ua || '未知设备'}
+                                        </td>
+                                        <td className='py-1.5 pr-6 text-gray-900 dark:text-gray-100'>
+                                          {formatAccessTime(
+                                            Math.floor(
+                                              device.session_time / 1000
+                                            )
+                                          )}
+                                        </td>
+                                        <td className='py-1.5 font-mono text-xs text-gray-500 dark:text-gray-400'>
+                                          {String(device.device_id || '').slice(
+                                            0,
+                                            8
+                                          )}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     );
                   })}
                 </tbody>

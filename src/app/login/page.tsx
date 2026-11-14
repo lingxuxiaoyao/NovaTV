@@ -6,6 +6,7 @@ import { AlertCircle, CheckCircle } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 
+import { getDeviceId } from '@/lib/db.client';
 import { checkForUpdates, CURRENT_VERSION, UpdateStatus } from '@/lib/version';
 
 import { useSite } from '@/components/SiteProvider';
@@ -34,7 +35,7 @@ function VersionDisplay() {
   return (
     <button
       onClick={() =>
-        window.open('https://github.com/senshinya/MoonTV', '_blank')
+        window.open('https://github.com/lingxuxiaoyao/NovaTV', '_blank')
       }
       className='absolute bottom-4 left-1/2 transform -translate-x-1/2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 transition-colors cursor-pointer'
     >
@@ -102,6 +103,7 @@ function LoginPageClient() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           password,
+          deviceId: getDeviceId(),
           ...(shouldAskUsername ? { username } : {}),
         }),
       });
@@ -132,7 +134,7 @@ function LoginPageClient() {
       const res = await fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, deviceId: getDeviceId() }),
       });
 
       if (res.ok) {

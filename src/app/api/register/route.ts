@@ -2,7 +2,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getConfig } from '@/lib/config';
-import { db } from '@/lib/db';
+import { db, getStorage } from '@/lib/db';
+import { parseDeviceDescription } from '@/lib/device';
 
 export const runtime = 'edge';
 
@@ -43,17 +44,24 @@ async function generateSignature(
 }
 
 // 生成认证Cookie（带签名）
-async function generateAuthCookie(username: string): Promise<string> {
+async function generateAuthCookie(
+  username: string,
+  timestamp?: number,
+  deviceId?: string
+): Promise<string> {
   const authData: any = {
     role: 'user',
     username,
-    timestamp: Date.now(),
+    timestamp: timestamp || Date.now(),
   };
 
   // 使用process.env.PASSWORD作为签名密钥，而不是用户密码
   const signingKey = process.env.PASSWORD || '';
   const signature = await generateSignature(username, signingKey);
   authData.signature = signature;
+  if (deviceId) {
+    authData.device_id = deviceId; // 登录设备标识（用于设备数量限制）
+  }
 
   return encodeURIComponent(JSON.stringify(authData));
 }
@@ -74,7 +82,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: '当前未开放注册' }, { status: 400 });
     }
 
-    const { username, password } = await req.json();
+    const body = await req.json();
+    const { username, password } = body;
+    // 设备标识：客户端（登录页）持久保存的 deviceId；缺失时服务端兜底生成，保证 cookie 始终携带设备标识
+    const deviceId: string = body.deviceId || crypto.randomUUID();
+    const deviceDesc = parseDeviceDescription(req.headers.get('user-agent'));
 
     if (!username || typeof username !== 'string') {
       return NextResponse.json({ error: '用户名不能为空' }, { status: 400 });
@@ -104,9 +116,14 @@ export async function POST(req: NextRequest) {
       });
       await db.saveAdminConfig(config);
 
-      // 注册成功，设置认证cookie
+      // 注册成功，设置认证cookie（时间戳同时作为会话标识登记，保证设备数量限制生效）
+      const loginTime = Date.now();
       const response = NextResponse.json({ ok: true });
-      const cookieValue = await generateAuthCookie(username);
+      const cookieValue = await generateAuthCookie(
+        username,
+        loginTime,
+        deviceId
+      );
       const expires = new Date();
       expires.setDate(expires.getDate() + 7); // 7天过期
 
@@ -117,6 +134,21 @@ export async function POST(req: NextRequest) {
         httpOnly: false, // PWA 需要客户端可访问
         secure: false, // 根据协议自动设置
       });
+
+      // 登记登录会话（超过设备上限时最早的设备cookie失效）
+      try {
+        const storage = getStorage();
+        if (storage) {
+          await storage.saveUserSession(
+            username,
+            loginTime,
+            deviceId,
+            deviceDesc
+          );
+        }
+      } catch (err) {
+        console.error('登记登录会话失败:', err);
+      }
 
       return response;
     } catch (err) {

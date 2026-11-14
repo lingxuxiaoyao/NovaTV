@@ -1,3 +1,4 @@
+import ActivityReporter from './ActivityReporter';
 import { BackButton } from './BackButton';
 import MobileBottomNav from './MobileBottomNav';
 import MobileHeader from './MobileHeader';
@@ -13,6 +14,9 @@ interface PageLayoutProps {
 const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
   return (
     <div className='w-full min-h-screen'>
+      {/* 用户活跃上报（非 localstorage 模式） */}
+      <ActivityReporter />
+
       {/* 移动端头部 */}
       <MobileHeader showBackButton={['/play'].includes(activePath)} />
 

@@ -15,7 +15,8 @@
  */
 
 import { getAuthInfoFromBrowserCookie } from './auth';
-import { SkipConfig } from './types';
+import { buildCommentKey } from './comment';
+import { SkipConfig, VideoComment, VideoCommentList } from './types';
 
 // 全局错误触发函数
 function triggerGlobalError(message: string) {
@@ -68,14 +69,82 @@ interface UserCacheStore {
 }
 
 // ---- 常量 ----
-const PLAY_RECORDS_KEY = 'moontv_play_records';
-const FAVORITES_KEY = 'moontv_favorites';
-const SEARCH_HISTORY_KEY = 'moontv_search_history';
+const PLAY_RECORDS_KEY = 'novatv_play_records';
+const FAVORITES_KEY = 'novatv_favorites';
+const SEARCH_HISTORY_KEY = 'novatv_search_history';
+const SKIP_CONFIGS_KEY = 'novatv_skip_configs';
+const DEVICE_ID_KEY = 'novatv_device_id';
+
+// 获取（或首次生成）本设备的唯一标识，持久保存在 localStorage。
+// 同一浏览器重复登录复用同一 ID，服务端据此识别"老设备重新登录"，
+// 只更新其会话时间，不会多占登录设备名额。
+export function getDeviceId(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    let deviceId = window.localStorage.getItem(DEVICE_ID_KEY);
+    if (!deviceId) {
+      deviceId =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `d_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      window.localStorage.setItem(DEVICE_ID_KEY, deviceId);
+    }
+    return deviceId;
+  } catch {
+    return '';
+  }
+}
 
 // 缓存相关常量
-const CACHE_PREFIX = 'moontv_cache_';
+const CACHE_PREFIX = 'novatv_cache_';
 const CACHE_VERSION = '1.0.0';
 const CACHE_EXPIRE_TIME = 60 * 60 * 1000; // 一小时缓存过期
+
+// ---- 旧版存储键迁移 ----
+// 项目由 MoonTV 更名为 NovaTV，本地存储键随之更名。
+// 首次加载时把旧键（moontv_*）的数据复制到新键（novatv_*），
+// 保证升级后用户的播放记录、收藏、搜索历史、跳过片头配置不丢失。
+const LEGACY_KEY_MAP: Array<[string, string]> = [
+  ['moontv_play_records', PLAY_RECORDS_KEY],
+  ['moontv_favorites', FAVORITES_KEY],
+  ['moontv_search_history', SEARCH_HISTORY_KEY],
+  ['moontv_skip_configs', SKIP_CONFIGS_KEY],
+];
+
+function migrateLegacyStorageKeys() {
+  if (typeof window === 'undefined') return;
+  for (const [legacyKey, newKey] of LEGACY_KEY_MAP) {
+    try {
+      const legacyValue = window.localStorage.getItem(legacyKey);
+      if (legacyValue === null) continue; // 旧键不存在，无需迁移
+
+      // 新键尚无数据时才复制，避免覆盖用户在新版本里已产生的数据
+      if (window.localStorage.getItem(newKey) === null) {
+        window.localStorage.setItem(newKey, legacyValue);
+      }
+      window.localStorage.removeItem(legacyKey);
+    } catch (err) {
+      // 迁移失败不影响正常使用
+      console.warn('迁移旧版存储数据失败:', legacyKey, err);
+    }
+  }
+
+  // 清理旧版的一次性缓存键（带过期时间，无需迁移内容）
+  try {
+    const legacyCacheKeys: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (key && key.startsWith('moontv_cache_')) {
+        legacyCacheKeys.push(key);
+      }
+    }
+    legacyCacheKeys.forEach((key) => window.localStorage.removeItem(key));
+  } catch {
+    // ignore
+  }
+}
+
+migrateLegacyStorageKeys();
 
 // ---- 环境变量 ----
 const STORAGE_TYPE = (() => {
@@ -1174,6 +1243,142 @@ export async function clearAllFavorites(): Promise<void> {
   );
 }
 
+// ---------------- 视频评论 ----------------
+// 数据库存储模式走 /api/comments 接口（服务端统一归一化作品键并富化角色）；
+// 本地存储模式存浏览器 localStorage（仅本机可见），按作品分键保存。
+
+const COMMENTS_KEY_PREFIX = 'novatv_comments_';
+const LOCAL_COMMENTS_LIMIT = 500; // 与服务端 MAX_COMMENTS_PER_VIDEO 保持一致
+
+function localCommentsStorageKey(videoKey: string): string {
+  return `${COMMENTS_KEY_PREFIX}${videoKey}`;
+}
+
+function readLocalVideoComments(videoKey: string): VideoComment[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(localCommentsStorageKey(videoKey));
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? (list as VideoComment[]) : [];
+  } catch (err) {
+    console.warn('读取本地评论失败:', err);
+    return [];
+  }
+}
+
+function writeLocalVideoComments(
+  videoKey: string,
+  comments: VideoComment[]
+): void {
+  if (typeof window === 'undefined') return;
+  try {
+    // 与服务端一致：最多保留最近 500 条
+    const trimmed = comments.slice(0, LOCAL_COMMENTS_LIMIT);
+    window.localStorage.setItem(
+      localCommentsStorageKey(videoKey),
+      JSON.stringify(trimmed)
+    );
+  } catch (err) {
+    console.warn('保存本地评论失败:', err);
+  }
+}
+
+/**
+ * 分页读取评论（新的在前）
+ */
+export async function fetchVideoComments(
+  title: string,
+  year: string,
+  page: number,
+  pageSize: number
+): Promise<VideoCommentList> {
+  // 数据库存储模式：走服务端接口
+  if (STORAGE_TYPE !== 'localstorage') {
+    const query = new URLSearchParams({
+      title,
+      year: year || '',
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+    return fetchFromApi<VideoCommentList>(`/api/comments?${query.toString()}`);
+  }
+
+  // 本地存储模式：读取本机评论并分页
+  const videoKey = buildCommentKey(title, year);
+  const all = readLocalVideoComments(videoKey).sort(
+    (a, b) => b.created_at - a.created_at
+  );
+  const start = (page - 1) * pageSize;
+  return {
+    comments: all.slice(start, start + pageSize),
+    total: all.length,
+    has_more: start + pageSize < all.length,
+  };
+}
+
+/**
+ * 发表评论，返回带 id/created_at 的完整评论对象
+ */
+export async function postVideoComment(
+  title: string,
+  year: string,
+  content: string,
+  episodeIndex?: number
+): Promise<VideoComment> {
+  // 数据库存储模式：服务端从 cookie 取用户名并生成 id/时间
+  if (STORAGE_TYPE !== 'localstorage') {
+    const res = await fetchWithAuth('/api/comments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, year, content, episodeIndex }),
+    });
+    const data = (await res.json()) as { comment: VideoComment };
+    return data.comment;
+  }
+
+  // 本地存储模式：匿名发布，显示为“我”
+  const videoKey = buildCommentKey(title, year);
+  const comment: VideoComment = {
+    id:
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `c_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+    username: '我',
+    video_key: videoKey,
+    episode_index: episodeIndex,
+    content,
+    created_at: Math.floor(Date.now() / 1000),
+  };
+  const list = readLocalVideoComments(videoKey);
+  list.unshift(comment);
+  writeLocalVideoComments(videoKey, list);
+  return comment;
+}
+
+/**
+ * 删除评论（服务端会校验本人或 owner/admin 权限；本地模式删除本机评论）
+ */
+export async function removeVideoComment(
+  title: string,
+  year: string,
+  commentId: string
+): Promise<void> {
+  if (STORAGE_TYPE !== 'localstorage') {
+    await fetchWithAuth('/api/comments', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, year, id: commentId }),
+    });
+    return;
+  }
+
+  const videoKey = buildCommentKey(title, year);
+  const list = readLocalVideoComments(videoKey).filter(
+    (c) => c.id !== commentId
+  );
+  writeLocalVideoComments(videoKey, list);
+}
+
 // ---------------- 混合缓存辅助函数 ----------------
 
 /**
@@ -1398,7 +1603,7 @@ export async function getSkipConfig(
 
   // localStorage 模式
   try {
-    const raw = localStorage.getItem('moontv_skip_configs');
+    const raw = localStorage.getItem(SKIP_CONFIGS_KEY);
     if (!raw) return null;
     const configs = JSON.parse(raw) as Record<string, SkipConfig>;
     return configs[key] || null;
@@ -1457,10 +1662,10 @@ export async function saveSkipConfig(
   }
 
   try {
-    const raw = localStorage.getItem('moontv_skip_configs');
+    const raw = localStorage.getItem(SKIP_CONFIGS_KEY);
     const configs = raw ? (JSON.parse(raw) as Record<string, SkipConfig>) : {};
     configs[key] = config;
-    localStorage.setItem('moontv_skip_configs', JSON.stringify(configs));
+    localStorage.setItem(SKIP_CONFIGS_KEY, JSON.stringify(configs));
     window.dispatchEvent(
       new CustomEvent('skipConfigsUpdated', {
         detail: configs,
@@ -1527,7 +1732,7 @@ export async function getAllSkipConfigs(): Promise<Record<string, SkipConfig>> {
 
   // localStorage 模式
   try {
-    const raw = localStorage.getItem('moontv_skip_configs');
+    const raw = localStorage.getItem(SKIP_CONFIGS_KEY);
     if (!raw) return {};
     return JSON.parse(raw) as Record<string, SkipConfig>;
   } catch (err) {
@@ -1580,11 +1785,11 @@ export async function deleteSkipConfig(
   }
 
   try {
-    const raw = localStorage.getItem('moontv_skip_configs');
+    const raw = localStorage.getItem(SKIP_CONFIGS_KEY);
     if (raw) {
       const configs = JSON.parse(raw) as Record<string, SkipConfig>;
       delete configs[key];
-      localStorage.setItem('moontv_skip_configs', JSON.stringify(configs));
+      localStorage.setItem(SKIP_CONFIGS_KEY, JSON.stringify(configs));
       window.dispatchEvent(
         new CustomEvent('skipConfigsUpdated', {
           detail: configs,

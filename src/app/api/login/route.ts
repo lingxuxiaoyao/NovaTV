@@ -2,9 +2,55 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getConfig } from '@/lib/config';
-import { db } from '@/lib/db';
+import { db, getStorage } from '@/lib/db';
+import { parseDeviceDescription } from '@/lib/device';
 
 export const runtime = 'edge';
+
+// 从请求头提取客户端真实 IP（支持反向代理/CDN 场景）
+function getClientIp(request: NextRequest): string {
+  const forwarded = request.headers.get('x-forwarded-for');
+  if (forwarded) {
+    return forwarded.split(',')[0].trim();
+  }
+  return (
+    request.headers.get('cf-connecting-ip') ||
+    request.headers.get('x-real-ip') ||
+    '未知'
+  );
+}
+
+// 登记登录会话（超过设备上限时最早的设备被挤出，其登录cookie随即失效）
+async function saveUserSessionSafe(
+  username: string,
+  loginTime: number,
+  deviceId: string,
+  ua: string
+) {
+  try {
+    const storage = getStorage();
+    if (!storage) return;
+    await storage.saveUserSession(username, loginTime, deviceId, ua);
+  } catch (err) {
+    console.error('登记登录会话失败:', err);
+  }
+}
+
+// 记录一次上线（登录成功时调用）
+async function recordUserAccess(username: string, request: NextRequest) {
+  try {
+    const storage = getStorage();
+    if (!storage) return;
+    const now = Math.floor(Date.now() / 1000);
+    await storage.saveUserAccess(username, {
+      login_time: now,
+      ip: getClientIp(request),
+      last_active: now,
+    });
+  } catch (err) {
+    console.error('记录用户上线信息失败:', err);
+  }
+}
 
 // 读取存储类型环境变量，默认 localstorage
 const STORAGE_TYPE =
@@ -47,7 +93,9 @@ async function generateAuthCookie(
   username?: string,
   password?: string,
   role?: 'owner' | 'admin' | 'user',
-  includePassword = false
+  includePassword = false,
+  timestamp?: number,
+  deviceId?: string
 ): Promise<string> {
   const authData: any = { role: role || 'user' };
 
@@ -61,7 +109,10 @@ async function generateAuthCookie(
     // 使用密码作为密钥对用户名进行签名
     const signature = await generateSignature(username, process.env.PASSWORD);
     authData.signature = signature;
-    authData.timestamp = Date.now(); // 添加时间戳防重放攻击
+    authData.timestamp = timestamp || Date.now(); // 添加时间戳防重放攻击（同时作为登录会话标识）
+    if (deviceId) {
+      authData.device_id = deviceId; // 登录设备标识（用于设备数量限制）
+    }
   }
 
   return encodeURIComponent(JSON.stringify(authData));
@@ -124,27 +175,31 @@ export async function POST(req: NextRequest) {
     }
 
     // 数据库 / redis 模式——校验用户名并尝试连接数据库
-    const { username, password } = await req.json();
-
+    const body = await req.json();
+    const { username, password } = body;
+    // 设备标识：客户端（登录页）持久保存的 deviceId；缺失时服务端兜底生成，保证 cookie 始终携带设备标识
+    const deviceId: string = body.deviceId || crypto.randomUUID();
+    const deviceDesc = parseDeviceDescription(req.headers.get('user-agent'));
     if (!username || typeof username !== 'string') {
       return NextResponse.json({ error: '用户名不能为空' }, { status: 400 });
     }
     if (!password || typeof password !== 'string') {
       return NextResponse.json({ error: '密码不能为空' }, { status: 400 });
     }
-
-    // 可能是站长，直接读环境变量
     if (
       username === process.env.USERNAME &&
       password === process.env.PASSWORD
     ) {
-      // 验证成功，设置认证cookie
+      // 验证成功，设置认证cookie（时间戳同时作为会话标识登记，保证设备数量限制生效）
+      const loginTime = Date.now();
       const response = NextResponse.json({ ok: true });
       const cookieValue = await generateAuthCookie(
         username,
         password,
         'owner',
-        false
+        false,
+        loginTime,
+        deviceId
       ); // 数据库模式不包含 password
       const expires = new Date();
       expires.setDate(expires.getDate() + 7); // 7天过期
@@ -156,6 +211,10 @@ export async function POST(req: NextRequest) {
         httpOnly: false, // PWA 需要客户端可访问
         secure: false, // 根据协议自动设置
       });
+
+      // 登记登录会话（超过设备上限时最早的设备cookie失效）并记录上线信息
+      await saveUserSessionSafe(username, loginTime, deviceId, deviceDesc);
+      await recordUserAccess(username, req);
 
       return response;
     } else if (username === process.env.USERNAME) {
@@ -178,13 +237,16 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // 验证成功，设置认证cookie
+      // 验证成功，设置认证cookie（时间戳同时作为会话标识登记，保证设备数量限制生效）
+      const loginTime = Date.now();
       const response = NextResponse.json({ ok: true });
       const cookieValue = await generateAuthCookie(
         username,
         password,
         user?.role || 'user',
-        false
+        false,
+        loginTime,
+        deviceId
       ); // 数据库模式不包含 password
       const expires = new Date();
       expires.setDate(expires.getDate() + 7); // 7天过期
@@ -196,6 +258,10 @@ export async function POST(req: NextRequest) {
         httpOnly: false, // PWA 需要客户端可访问
         secure: false, // 根据协议自动设置
       });
+
+      // 登记登录会话（超过设备上限时最早的设备cookie失效）并记录上线信息
+      await saveUserSessionSafe(username, loginTime, deviceId, deviceDesc);
+      await recordUserAccess(username, req);
 
       return response;
     } catch (err) {
