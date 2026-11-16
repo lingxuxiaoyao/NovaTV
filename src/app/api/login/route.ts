@@ -1,7 +1,7 @@
 /* eslint-disable no-console,@typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getConfig } from '@/lib/config';
+import { getConfig, getUserDeviceLimit } from '@/lib/config';
 import { db, getStorage } from '@/lib/db';
 import { parseDeviceDescription } from '@/lib/device';
 
@@ -20,7 +20,7 @@ function getClientIp(request: NextRequest): string {
   );
 }
 
-// 登记登录会话（超过设备上限时最早的设备被挤出，其登录cookie随即失效）
+// 登记登录会话（超过该用户的设备上限时最早的设备被挤出，其登录cookie随即失效）
 async function saveUserSessionSafe(
   username: string,
   loginTime: number,
@@ -30,7 +30,8 @@ async function saveUserSessionSafe(
   try {
     const storage = getStorage();
     if (!storage) return;
-    await storage.saveUserSession(username, loginTime, deviceId, ua);
+    const limit = await getUserDeviceLimit(username);
+    await storage.saveUserSession(username, loginTime, deviceId, ua, limit);
   } catch (err) {
     console.error('登记登录会话失败:', err);
   }

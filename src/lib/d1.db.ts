@@ -447,16 +447,12 @@ export class D1Storage implements IStorage {
   }
 
   // ---------- 登录设备会话 ----------
-  private getDeviceLimit(): number {
-    const limit = parseInt(process.env.SESSION_DEVICE_LIMIT || '3', 10);
-    return isNaN(limit) || limit < 1 ? 3 : limit;
-  }
-
   async saveUserSession(
     userName: string,
     timestampMs: number,
     deviceId?: string,
-    ua?: string
+    ua?: string,
+    limit?: number
   ): Promise<void> {
     if (!deviceId) return; // 无设备标识不登记（不占设备名额）
 
@@ -471,6 +467,9 @@ export class D1Storage implements IStorage {
         .bind(userName, deviceId, timestampMs, ua || '')
         .run();
 
+      const maxDevices = limit && limit > 0 ? Math.floor(limit) : 0;
+      if (maxDevices === 0) return; // 不限制设备数量，只登记不淘汰
+
       // 超过设备上限时，最早登录的设备被挤出（其登录cookie随即失效）
       await db
         .prepare(
@@ -482,7 +481,7 @@ export class D1Storage implements IStorage {
              LIMIT ?
            )`
         )
-        .bind(userName, userName, this.getDeviceLimit())
+        .bind(userName, userName, maxDevices)
         .run();
     } catch (err) {
       console.error('Failed to save user session:', err);
@@ -493,13 +492,15 @@ export class D1Storage implements IStorage {
   async hasUserSession(
     userName: string,
     timestampMs: number,
-    deviceId?: string
+    deviceId?: string,
+    limit?: number
   ): Promise<boolean> {
-    if (!deviceId) return false; // 无设备标识的旧cookie视为失效，重新登录即可恢复
+    const maxDevices = limit && limit > 0 ? Math.floor(limit) : 0;
+    // 无设备标识的旧cookie：不限制时视为有效，有限制时视为失效（重新登录即可恢复）
+    if (!deviceId) return maxDevices === 0;
 
     try {
       const db = await this.getDatabase();
-      const limit = this.getDeviceLimit();
 
       // 该设备当前登记的会话信息
       const rows = await db
@@ -509,8 +510,11 @@ export class D1Storage implements IStorage {
         .bind(userName, deviceId)
         .all<any>();
       const row = (rows.results || [])[0];
-      if (!row) return false; // 设备已被挤出或未登记
+      // 未登记：不限制时放行，有限制时视为已被挤出
+      if (!row) return maxDevices === 0;
       if (Number(row.session_time) !== timestampMs) return false; // 该设备已在别处重新登录，旧cookie失效
+
+      if (maxDevices === 0) return true; // 不限制设备数量
 
       // 检查是否仍在上限名额内（按最近登录时间排名，比它新的设备数 < 上限）
       const rankRows = await db
@@ -520,7 +524,7 @@ export class D1Storage implements IStorage {
         .bind(userName, Number(row.session_time))
         .all<any>();
       const rank = Number((rankRows.results || [])[0]?.cnt || 0);
-      return rank < limit;
+      return rank < maxDevices;
     } catch (err) {
       console.error('Failed to check user session:', err);
       throw err;

@@ -14,6 +14,7 @@ export interface AdminConfig {
       username: string;
       role: 'user' | 'admin' | 'owner';
       banned?: boolean;
+      device_limit?: number; // 登录设备数量上限（0或缺省 = 不限制）
     }[];
   };
   SourceConfig: {

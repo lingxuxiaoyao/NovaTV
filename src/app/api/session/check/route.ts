@@ -1,11 +1,13 @@
 /* eslint-disable no-console */
 import { NextRequest, NextResponse } from 'next/server';
 
+import { getUserDeviceLimit } from '@/lib/config';
 import { getStorage } from '@/lib/db';
 
 export const runtime = 'edge';
 
 // 登录设备会话校验（供 middleware 内部调用）
+// 设备上限按用户在管理后台的单独配置（device_limit，0 = 不限制）
 // 返回该次登录的会话是否仍然有效（未被更新的设备挤出、未超过7天）
 export async function GET(request: NextRequest) {
   try {
@@ -20,12 +22,7 @@ export async function GET(request: NextRequest) {
     const timestamp = Number(searchParams.get('t'));
     const deviceId = searchParams.get('d') || undefined;
 
-    if (
-      !username ||
-      !Number.isFinite(timestamp) ||
-      timestamp <= 0 ||
-      !deviceId
-    ) {
+    if (!username || !Number.isFinite(timestamp) || timestamp <= 0) {
       return NextResponse.json({ valid: false });
     }
 
@@ -34,7 +31,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ valid: true });
     }
 
-    const valid = await storage.hasUserSession(username, timestamp, deviceId);
+    const limit = await getUserDeviceLimit(username);
+    const valid = await storage.hasUserSession(
+      username,
+      timestamp,
+      deviceId,
+      limit
+    );
     return NextResponse.json(
       { valid },
       {

@@ -283,22 +283,18 @@ export class RedisStorage implements IStorage {
     return `u:${user}:device_meta`;
   }
 
-  private getDeviceLimit(): number {
-    const limit = parseInt(process.env.SESSION_DEVICE_LIMIT || '3', 10);
-    return isNaN(limit) || limit < 1 ? 3 : limit;
-  }
-
   async saveUserSession(
     userName: string,
     timestampMs: number,
     deviceId?: string,
-    ua?: string
+    ua?: string,
+    limit?: number
   ): Promise<void> {
     if (!deviceId) return; // 无设备标识不登记（不占设备名额）
 
     const key = this.sessionKey(userName);
     const metaKey = this.deviceMetaKey(userName);
-    const limit = this.getDeviceLimit();
+    const maxDevices = limit && limit > 0 ? Math.floor(limit) : 0;
 
     // 同一设备重复登录：原地更新会话时间，不额外占名额
     await withRetry(() =>
@@ -308,15 +304,19 @@ export class RedisStorage implements IStorage {
       await withRetry(() => this.client.hSet(metaKey, deviceId, ua));
     }
 
+    if (maxDevices === 0) return; // 不限制设备数量，只登记不淘汰
+
     // 超过设备上限时，最早登录的设备被挤出（其登录cookie随即失效）
     const evicted = await withRetry(() =>
-      this.client.zRange(key, 0, -(limit + 1))
+      this.client.zRange(key, 0, -(maxDevices + 1))
     );
     if (evicted && evicted.length > 0) {
-      await withRetry(() => this.client.zRemRangeByRank(key, 0, -(limit + 1)));
-      for (const deviceId of evicted) {
+      await withRetry(() =>
+        this.client.zRemRangeByRank(key, 0, -(maxDevices + 1))
+      );
+      for (const evictedId of evicted) {
         await withRetry(() =>
-          this.client.hDel(metaKey, ensureString(deviceId))
+          this.client.hDel(metaKey, ensureString(evictedId))
         );
       }
     }
@@ -325,20 +325,26 @@ export class RedisStorage implements IStorage {
   async hasUserSession(
     userName: string,
     timestampMs: number,
-    deviceId?: string
+    deviceId?: string,
+    limit?: number
   ): Promise<boolean> {
-    if (!deviceId) return false; // 无设备标识的旧cookie视为失效，重新登录即可恢复
+    const maxDevices = limit && limit > 0 ? Math.floor(limit) : 0;
+    // 无设备标识的旧cookie：不限制时视为有效，有限制时视为失效（重新登录即可恢复）
+    if (!deviceId) return maxDevices === 0;
 
     const key = this.sessionKey(userName);
     const score = await withRetry(() => this.client.zScore(key, deviceId));
-    if (score === null || score === undefined) return false; // 设备已被挤出或未登记
+    // 未登记：不限制时放行，有限制时视为已被挤出
+    if (score === null || score === undefined) return maxDevices === 0;
 
     const loginTime = Number(ensureString(score));
     if (isNaN(loginTime) || loginTime !== timestampMs) return false; // 该设备已在别处重新登录，旧cookie失效
 
+    if (maxDevices === 0) return true; // 不限制设备数量
+
     // 检查是否仍在上限名额内（按最近登录时间排名）
     const rank = await withRetry(() => this.client.zRevRank(key, deviceId));
-    return rank !== null && rank !== undefined && rank < this.getDeviceLimit();
+    return rank !== null && rank !== undefined && rank < maxDevices;
   }
 
   async getUserDevices(userName: string): Promise<DeviceSessionInfo[]> {

@@ -49,7 +49,7 @@ export async function middleware(request: NextRequest) {
       process.env.PASSWORD || ''
     );
 
-    // 签名验证通过后，校验登录设备会话是否仍有效（设备数量超限时最早的会话被挤出）
+    // 签名验证通过后，校验登录设备会话是否仍有效（设备上限按用户在管理后台的单独配置）
     if (isValidSignature && (await checkUserSession(request, authInfo))) {
       return NextResponse.next();
     }
@@ -59,14 +59,9 @@ export async function middleware(request: NextRequest) {
   return handleAuthFailure(request, pathname);
 }
 
-// 设备数量上限（环境变量 SESSION_DEVICE_LIMIT，默认3；设为0表示不限制）
-function getDeviceLimit(): number {
-  const limit = parseInt(process.env.SESSION_DEVICE_LIMIT || '3', 10);
-  return isNaN(limit) || limit < 0 ? 3 : limit;
-}
-
 // 校验登录会话有效性：通过内部接口查询存储中的会话列表
-// （middleware 运行在 Edge 环境，无法直接访问 Redis/D1，故经由 API 路由查询）
+// 设备上限按用户单独配置（device_limit，0 = 不限制），由校验接口读取配置后判定
+// （middleware 无法直接访问 Redis/D1，故经由 API 路由查询）
 async function checkUserSession(
   request: NextRequest,
   authInfo: { username?: string; timestamp?: number; device_id?: string }
@@ -74,19 +69,17 @@ async function checkUserSession(
   const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
   if (storageType === 'localstorage') return true;
 
-  const deviceLimit = getDeviceLimit();
-  if (deviceLimit === 0) return true; // 0 = 不限制设备数量
-
-  if (!authInfo.timestamp || !authInfo.device_id) {
-    // 旧版cookie没有会话标识或设备标识，按失效处理（重新登录即可恢复）
-    return false;
-  }
-
   try {
     const checkUrl = new URL('/api/session/check', request.url);
-    checkUrl.searchParams.set('u', authInfo.username || '');
-    checkUrl.searchParams.set('t', String(authInfo.timestamp));
-    checkUrl.searchParams.set('d', authInfo.device_id);
+    if (authInfo.username) {
+      checkUrl.searchParams.set('u', authInfo.username);
+    }
+    if (authInfo.timestamp) {
+      checkUrl.searchParams.set('t', String(authInfo.timestamp));
+    }
+    if (authInfo.device_id) {
+      checkUrl.searchParams.set('d', authInfo.device_id);
+    }
 
     const res = await fetch(checkUrl, { method: 'GET' });
     if (!res.ok) return true; // 校验服务异常时放行，避免误伤

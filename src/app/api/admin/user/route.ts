@@ -16,6 +16,7 @@ const ACTIONS = [
   'unban',
   'setAdmin',
   'cancelAdmin',
+  'setDeviceLimit',
   'setAllowRegister',
   'changePassword',
   'deleteUser',
@@ -43,12 +44,14 @@ export async function POST(request: NextRequest) {
 
     const {
       targetUsername, // 目标用户名
-      targetPassword, // 目标用户密码（仅在添加用户时需要）
+      targetPassword, // 目标用户密码（仅在添加用户/修改密码时需要）
+      targetDeviceLimit, // 目标用户设备数量上限（仅在设置设备上限时需要）
       allowRegister,
       action,
     } = body as {
       targetUsername?: string;
       targetPassword?: string;
+      targetDeviceLimit?: number;
       allowRegister?: boolean;
       action?: (typeof ACTIONS)[number];
     };
@@ -222,6 +225,34 @@ export async function POST(request: NextRequest) {
             );
           }
           targetEntry.role = 'user';
+          break;
+        }
+        case 'setDeviceLimit': {
+          if (!targetEntry) {
+            return NextResponse.json(
+              { error: '目标用户不存在' },
+              { status: 404 }
+            );
+          }
+          // 权限检查：仅站长可设置管理员的设备上限
+          if (isTargetAdmin && operatorRole !== 'owner') {
+            return NextResponse.json(
+              { error: '仅站长可设置管理员设备上限' },
+              { status: 401 }
+            );
+          }
+          if (
+            typeof targetDeviceLimit !== 'number' ||
+            !Number.isInteger(targetDeviceLimit) ||
+            targetDeviceLimit < 0 ||
+            targetDeviceLimit > 99
+          ) {
+            return NextResponse.json(
+              { error: '设备上限必须为 0-99 的整数（0 表示不限制）' },
+              { status: 400 }
+            );
+          }
+          targetEntry.device_limit = targetDeviceLimit;
           break;
         }
         case 'changePassword': {

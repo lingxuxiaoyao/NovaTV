@@ -1,7 +1,7 @@
 /* eslint-disable no-console,@typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getConfig } from '@/lib/config';
+import { getConfig, getUserDeviceLimit } from '@/lib/config';
 import { db, getStorage } from '@/lib/db';
 import { parseDeviceDescription } from '@/lib/device';
 
@@ -135,15 +135,17 @@ export async function POST(req: NextRequest) {
         secure: false, // 根据协议自动设置
       });
 
-      // 登记登录会话（超过设备上限时最早的设备cookie失效）
+      // 登记登录会话（超过该用户的设备上限时最早的设备cookie失效）
       try {
         const storage = getStorage();
         if (storage) {
+          const limit = await getUserDeviceLimit(username);
           await storage.saveUserSession(
             username,
             loginTime,
             deviceId,
-            deviceDesc
+            deviceDesc,
+            limit
           );
         }
       } catch (err) {

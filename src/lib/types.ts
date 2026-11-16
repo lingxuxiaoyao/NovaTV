@@ -126,21 +126,23 @@ export interface IStorage {
   // 读取访问统计（最近10条记录 + 累计使用秒数）
   getUserAccessSummary(userName: string): Promise<UserAccessSummary>;
 
-  // 登录设备会话管理（限制同账号并发登录设备数）
+  // 登录设备会话管理（按用户配置限制同账号并发登录设备数，limit <= 0 表示不限制）
   // 以 deviceId 标识一台设备；重复登录时原地更新该设备的会话时间，不额外占名额；
-  // 设备数超过上限时自动淘汰最早登录的设备
+  // 设备数超过上限时自动淘汰最早登录的设备（不限制时只登记不淘汰）
   saveUserSession(
     userName: string,
     timestampMs: number,
     deviceId?: string,
-    ua?: string
+    ua?: string,
+    limit?: number
   ): Promise<void>;
   // 校验某次登录的会话是否仍有效（设备未超限被挤下线）
-  // deviceId 缺省（旧cookie未登记设备）视为失效，重新登录即可恢复
+  // deviceId 缺省：有限制时视为失效（重新登录即可恢复），不限制时视为有效
   hasUserSession(
     userName: string,
     timestampMs: number,
-    deviceId?: string
+    deviceId?: string,
+    limit?: number
   ): Promise<boolean>;
   // 读取用户的全部登录设备（按最近登录时间倒序），供管理界面展示
   getUserDevices(userName: string): Promise<DeviceSessionInfo[]>;

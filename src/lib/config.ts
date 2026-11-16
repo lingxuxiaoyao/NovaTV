@@ -478,6 +478,23 @@ export async function resetConfig() {
   cachedConfig.CustomCategories = adminConfig.CustomCategories;
 }
 
+// 读取指定用户的登录设备数量上限（管理端按用户单独配置；0 或缺省 = 不限制）
+export async function getUserDeviceLimit(username: string): Promise<number> {
+  try {
+    const config = await getConfig();
+    const limit = config.UserConfig.Users.find(
+      (u) => u.username === username
+    )?.device_limit;
+    if (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 1) {
+      return 0;
+    }
+    return Math.floor(limit);
+  } catch {
+    // 配置读取异常时按不限制处理，避免误伤在线用户
+    return 0;
+  }
+}
+
 export async function getCacheTime(): Promise<number> {
   const config = await getConfig();
   return config.SiteConfig.SiteInterfaceCacheTime || 7200;
