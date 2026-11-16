@@ -1,4 +1,5 @@
-import { useEffect, useRef, useCallback } from 'react';
+/* eslint-disable @typescript-eslint/no-explicit-any,no-console */
+import { useCallback, useEffect, useRef } from 'react';
 
 export interface PlayHistoryPayload {
   [key: string]: any;

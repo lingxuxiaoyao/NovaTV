@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { Trash, Heart, Link, PlayCircleIcon } from 'lucide-react';
+import { Heart, Link, PlayCircleIcon, Trash } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -304,25 +304,25 @@ export default function VideoCard({
         {(config.showHeart || config.showCheckCircle) && (
           <div className='absolute bottom-3 right-3 flex gap-3 opacity-0 translate-y-2 transition-all duration-300 ease-in-out group-hover:opacity-100 group-hover:translate-y-0'>
             {config.showCheckCircle && (
-              <span title="删除记录">
+              <span title='删除记录'>
                 <Trash
-                    onClick={handleDeleteRecord}
-                    size={20}
-                    className='text-white transition-all duration-300 ease-out hover:stroke-green-500 hover:scale-[1.1]'
-                  />
+                  onClick={handleDeleteRecord}
+                  size={20}
+                  className='text-white transition-all duration-300 ease-out hover:stroke-green-500 hover:scale-[1.1]'
+                />
               </span>
             )}
             {config.showHeart && (
-              <span title="收藏">
+              <span title='收藏'>
                 <Heart
-                    onClick={handleToggleFavorite}
-                    size={20}
-                    className={`transition-all duration-300 ease-out ${
-                      favorited
-                        ? 'fill-red-600 stroke-red-600'
-                        : 'fill-transparent stroke-white hover:stroke-red-400'
-                    } hover:scale-[1.1]`}
-                  />
+                  onClick={handleToggleFavorite}
+                  size={20}
+                  className={`transition-all duration-300 ease-out ${
+                    favorited
+                      ? 'fill-red-600 stroke-red-600'
+                      : 'fill-transparent stroke-white hover:stroke-red-400'
+                  } hover:scale-[1.1]`}
+                />
               </span>
             )}
           </div>
