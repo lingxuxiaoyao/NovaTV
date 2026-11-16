@@ -101,11 +101,11 @@ const CollapsibleTab = ({
     <div className='rounded-xl shadow-sm mb-4 overflow-hidden bg-white/80 backdrop-blur-md dark:bg-gray-800/50 dark:ring-1 dark:ring-gray-700'>
       <button
         onClick={onToggle}
-        className='w-full px-6 py-4 flex items-center justify-between bg-gray-50/70 dark:bg-gray-800/60 hover:bg-gray-100/80 dark:hover:bg-gray-700/60 transition-colors'
+        className='w-full px-4 py-3 sm:px-6 sm:py-4 flex items-center justify-between bg-gray-50/70 dark:bg-gray-800/60 hover:bg-gray-100/80 dark:hover:bg-gray-700/60 transition-colors'
       >
         <div className='flex items-center gap-3'>
           {icon}
-          <h3 className='text-lg font-medium text-gray-900 dark:text-gray-100'>
+          <h3 className='text-base sm:text-lg font-medium text-gray-900 dark:text-gray-100'>
             {title}
           </h3>
         </div>
@@ -114,7 +114,9 @@ const CollapsibleTab = ({
         </div>
       </button>
 
-      {isExpanded && <div className='px-6 py-4'>{children}</div>}
+      {isExpanded && (
+        <div className='px-3 py-3 sm:px-6 sm:py-4'>{children}</div>
+      )}
     </div>
   );
 };
@@ -293,7 +295,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
     await handleUserAction('deleteUser', username);
   };
 
-  // 通用请求函数
+  // 通用请求函数（返回是否成功，便于调用方决定是否提示成功）
   const handleUserAction = async (
     action:
       | 'add'
@@ -301,11 +303,13 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
       | 'unban'
       | 'setAdmin'
       | 'cancelAdmin'
+      | 'setDeviceLimit'
       | 'changePassword'
       | 'deleteUser',
     targetUsername: string,
-    targetPassword?: string
-  ) => {
+    targetPassword?: string,
+    targetDeviceLimit?: number
+  ): Promise<boolean> => {
     try {
       const res = await fetch('/api/admin/user', {
         method: 'POST',
@@ -313,6 +317,9 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
         body: JSON.stringify({
           targetUsername,
           ...(targetPassword ? { targetPassword } : {}),
+          ...(typeof targetDeviceLimit === 'number'
+            ? { targetDeviceLimit }
+            : {}),
           action,
         }),
       });
@@ -324,8 +331,48 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
 
       // 成功后刷新配置（无需整页刷新）
       await refreshConfig();
+      return true;
     } catch (err) {
       showError(err instanceof Error ? err.message : '操作失败');
+      return false;
+    }
+  };
+
+  // 设置用户登录设备数量上限（0 = 不限制）
+  const handleSetDeviceLimit = async (username: string) => {
+    const currentLimit =
+      config?.UserConfig.Users.find((u) => u.username === username)
+        ?.device_limit ?? 0;
+    const { value } = await Swal.fire({
+      title: '设置登录设备上限',
+      input: 'number',
+      inputLabel: `用户 ${username} 可同时登录的设备数量（0 表示不限制）`,
+      inputValue: String(currentLimit),
+      inputAttributes: { min: '0', max: '99', step: '1' },
+      showCancelButton: true,
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValidator: (input) => {
+        const num = Number(input);
+        if (!input || !Number.isInteger(num) || num < 0 || num > 99) {
+          return '请输入 0-99 的整数';
+        }
+        return null;
+      },
+    });
+
+    if (value === undefined || value === null) return; // 用户取消
+    const limit = Number(value);
+    const ok = await handleUserAction(
+      'setDeviceLimit',
+      username,
+      undefined,
+      limit
+    );
+    if (ok) {
+      showSuccess(
+        limit === 0 ? '已设为不限制设备数' : `设备上限已设为 ${limit} 台`
+      );
     }
   };
 
@@ -337,6 +384,229 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
     );
   }
 
+  // 按规则排序用户：自己 -> 站长(若非自己) -> 管理员 -> 其他
+  const sortedUsers = [...config.UserConfig.Users].sort((a, b) => {
+    const priority = (u: (typeof config.UserConfig.Users)[number]) => {
+      if (u.username === currentUsername) return 0;
+      if (u.role === 'owner') return 1;
+      if (u.role === 'admin') return 2;
+      return 3;
+    };
+    return priority(a) - priority(b);
+  });
+
+  type UserEntry = (typeof config.UserConfig.Users)[number];
+
+  // 角色徽章（桌面表格与移动端卡片共用）
+  const renderRoleBadge = (user: UserEntry) => (
+    <span
+      className={`px-2 py-1 text-xs rounded-full ${
+        user.role === 'owner'
+          ? 'bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300'
+          : user.role === 'admin'
+          ? 'bg-purple-100 dark:bg-purple-900/20 text-purple-800 dark:text-purple-300'
+          : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
+      }`}
+    >
+      {user.role === 'owner'
+        ? '站长'
+        : user.role === 'admin'
+        ? '管理员'
+        : '普通用户'}
+    </span>
+  );
+
+  // 状态徽章（桌面表格与移动端卡片共用）
+  const renderStatusBadge = (user: UserEntry) => (
+    <span
+      className={`px-2 py-1 text-xs rounded-full ${
+        !user.banned
+          ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-300'
+          : 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-300'
+      }`}
+    >
+      {!user.banned ? '正常' : '已封禁'}
+    </span>
+  );
+
+  // 用户操作按钮（桌面表格与移动端卡片共用），加大触控目标
+  const renderUserActions = (user: UserEntry) => {
+    // 修改密码权限：站长可修改管理员和普通用户密码，管理员可修改普通用户和自己的密码，但任何人都不能修改站长密码
+    const canChangePassword =
+      user.role !== 'owner' && // 不能修改站长密码
+      (role === 'owner' || // 站长可以修改管理员和普通用户密码
+        (role === 'admin' &&
+          (user.role === 'user' || user.username === currentUsername))); // 管理员可以修改普通用户和自己的密码
+
+    // 删除用户权限：站长可删除除自己外的所有用户，管理员仅可删除普通用户
+    const canDeleteUser =
+      user.username !== currentUsername &&
+      (role === 'owner' || // 站长可以删除除自己外的所有用户
+        (role === 'admin' && user.role === 'user')); // 管理员仅可删除普通用户
+
+    // 其他操作权限：不能操作自己，站长可操作所有用户，管理员可操作普通用户
+    const canOperate =
+      user.username !== currentUsername &&
+      (role === 'owner' || (role === 'admin' && user.role === 'user'));
+
+    return (
+      <div className='flex flex-wrap items-center gap-2'>
+        {/* 访问记录按钮 */}
+        <button
+          onClick={() =>
+            setExpandedUser(
+              expandedUser === user.username ? null : user.username
+            )
+          }
+          className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 hover:bg-indigo-200 dark:bg-indigo-900/40 dark:hover:bg-indigo-900/60 dark:text-indigo-200 transition-colors'
+        >
+          {expandedUser === user.username ? '收起记录' : '访问记录'}
+        </button>
+        {/* 修改密码按钮 */}
+        {canChangePassword && (
+          <button
+            onClick={() => handleShowChangePasswordForm(user.username)}
+            className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/40 dark:hover:bg-blue-900/60 dark:text-blue-200 transition-colors'
+          >
+            修改密码
+          </button>
+        )}
+        {canOperate && (
+          <>
+            {/* 设备上限按钮 */}
+            <button
+              onClick={() => handleSetDeviceLimit(user.username)}
+              className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium bg-teal-100 text-teal-800 hover:bg-teal-200 dark:bg-teal-900/40 dark:hover:bg-teal-900/60 dark:text-teal-200 transition-colors'
+            >
+              设备上限
+            </button>
+            {/* 其他操作按钮 */}
+            {user.role === 'user' && (
+              <button
+                onClick={() => handleSetAdmin(user.username)}
+                className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium bg-purple-100 text-purple-800 hover:bg-purple-200 dark:bg-purple-900/40 dark:hover:bg-purple-900/60 dark:text-purple-200 transition-colors'
+              >
+                设为管理
+              </button>
+            )}
+            {user.role === 'admin' && (
+              <button
+                onClick={() => handleRemoveAdmin(user.username)}
+                className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium bg-gray-100 text-gray-800 hover:bg-gray-200 dark:bg-gray-700/40 dark:hover:bg-gray-700/60 dark:text-gray-200 transition-colors'
+              >
+                取消管理
+              </button>
+            )}
+            {user.role !== 'owner' &&
+              (!user.banned ? (
+                <button
+                  onClick={() => handleBanUser(user.username)}
+                  className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:hover:bg-red-900/60 dark:text-red-300 transition-colors'
+                >
+                  封禁
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleUnbanUser(user.username)}
+                  className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-900/40 dark:hover:bg-green-900/60 dark:text-green-300 transition-colors'
+                >
+                  解封
+                </button>
+              ))}
+          </>
+        )}
+        {/* 删除用户按钮 - 放在最后，使用更明显的红色样式 */}
+        {canDeleteUser && (
+          <button
+            onClick={() => handleDeleteUser(user.username)}
+            className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium bg-red-600 text-white hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-700 transition-colors'
+          >
+            删除用户
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  // 访问记录与登录设备面板（桌面表格展开行与移动端卡片共用，紧凑行式布局免横向滚动）
+  const renderUserAccessPanel = (user: UserEntry) => {
+    const logs = accessData[user.username]?.logs || [];
+    const devices = accessData[user.username]?.devices || [];
+    return (
+      <>
+        <div className='text-xs font-medium text-gray-500 dark:text-gray-400 mb-2'>
+          最近访问记录（最多保留10次）
+        </div>
+        {logs.length === 0 ? (
+          <div className='text-sm text-gray-400 dark:text-gray-500'>
+            暂无访问记录
+          </div>
+        ) : (
+          <div className='space-y-1.5'>
+            {logs.map((log, idx) => (
+              <div
+                key={idx}
+                className='flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm text-gray-900 dark:text-gray-100'
+              >
+                <span className='font-medium whitespace-nowrap'>
+                  上线 {formatAccessTime(log.login_time)}
+                </span>
+                <span className='font-mono text-xs text-gray-600 dark:text-gray-300'>
+                  {log.ip || '-'}
+                </span>
+                <span className='text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap'>
+                  在线{' '}
+                  {formatUsageDuration(
+                    Math.max(
+                      0,
+                      (log.last_active || log.login_time) - log.login_time
+                    )
+                  )}
+                </span>
+                <span className='text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap'>
+                  活跃 {formatAccessTime(log.last_active)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 登录设备列表（超过设备上限时最早登录的设备失效） */}
+        <div className='text-xs font-medium text-gray-500 dark:text-gray-400 mt-4 mb-2'>
+          登录设备（共 {devices.length} 台 · 上限{' '}
+          {user.device_limit && user.device_limit > 0
+            ? `${user.device_limit} 台`
+            : '不限制'}
+          ）
+        </div>
+        {devices.length === 0 ? (
+          <div className='text-sm text-gray-400 dark:text-gray-500'>
+            暂无登录设备
+          </div>
+        ) : (
+          <div className='space-y-1.5'>
+            {devices.map((device, idx) => (
+              <div
+                key={idx}
+                className='flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm text-gray-900 dark:text-gray-100'
+              >
+                <span className='font-medium break-all'>
+                  {device.ua || '未知设备'}
+                </span>
+                <span className='text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap'>
+                  {formatAccessTime(Math.floor(device.session_time / 1000))}
+                </span>
+                <span className='font-mono text-xs text-gray-400 dark:text-gray-500'>
+                  {String(device.device_id || '').slice(0, 8)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </>
+    );
+  };
+
   return (
     <div className='space-y-6'>
       {/* 用户统计 */}
@@ -344,7 +614,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
         <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300 mb-3'>
           用户统计
         </h4>
-        <div className='p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800'>
+        <div className='p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800 flex items-center gap-3'>
           <div className='text-2xl font-bold text-green-800 dark:text-green-300'>
             {config.UserConfig.Users.length}
           </div>
@@ -505,7 +775,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
         )}
 
         {/* 用户列表 */}
-        <div className='border border-gray-200 dark:border-gray-700 rounded-lg max-h-[28rem] overflow-y-auto overflow-x-auto'>
+        <div className='hidden md:block border border-gray-200 dark:border-gray-700 rounded-lg max-h-[28rem] overflow-y-auto overflow-x-auto'>
           <table className='min-w-full divide-y divide-gray-200 dark:divide-gray-700'>
             <thead className='bg-gray-50 dark:bg-gray-900'>
               <tr>
@@ -553,303 +823,101 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                 </th>
               </tr>
             </thead>
-            {/* 按规则排序用户：自己 -> 站长(若非自己) -> 管理员 -> 其他 */}
-            {(() => {
-              const sortedUsers = [...config.UserConfig.Users].sort((a, b) => {
-                type UserInfo = (typeof config.UserConfig.Users)[number];
-                const priority = (u: UserInfo) => {
-                  if (u.username === currentUsername) return 0;
-                  if (u.role === 'owner') return 1;
-                  if (u.role === 'admin') return 2;
-                  return 3;
-                };
-                return priority(a) - priority(b);
-              });
-              return (
-                <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>
-                  {sortedUsers.map((user) => {
-                    // 修改密码权限：站长可修改管理员和普通用户密码，管理员可修改普通用户和自己的密码，但任何人都不能修改站长密码
-                    const canChangePassword =
-                      user.role !== 'owner' && // 不能修改站长密码
-                      (role === 'owner' || // 站长可以修改管理员和普通用户密码
-                        (role === 'admin' &&
-                          (user.role === 'user' ||
-                            user.username === currentUsername))); // 管理员可以修改普通用户和自己的密码
-
-                    // 删除用户权限：站长可删除除自己外的所有用户，管理员仅可删除普通用户
-                    const canDeleteUser =
-                      user.username !== currentUsername &&
-                      (role === 'owner' || // 站长可以删除除自己外的所有用户
-                        (role === 'admin' && user.role === 'user')); // 管理员仅可删除普通用户
-
-                    // 其他操作权限：不能操作自己，站长可操作所有用户，管理员可操作普通用户
-                    const canOperate =
-                      user.username !== currentUsername &&
-                      (role === 'owner' ||
-                        (role === 'admin' && user.role === 'user'));
-                    return (
-                      <Fragment key={user.username}>
-                        <tr className='hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors'>
-                          <td className='px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100'>
-                            {user.username}
-                          </td>
-                          <td className='px-6 py-4 whitespace-nowrap'>
-                            <span
-                              className={`px-2 py-1 text-xs rounded-full ${
-                                user.role === 'owner'
-                                  ? 'bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300'
-                                  : user.role === 'admin'
-                                  ? 'bg-purple-100 dark:bg-purple-900/20 text-purple-800 dark:text-purple-300'
-                                  : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
-                              }`}
-                            >
-                              {user.role === 'owner'
-                                ? '站长'
-                                : user.role === 'admin'
-                                ? '管理员'
-                                : '普通用户'}
-                            </span>
-                          </td>
-                          <td className='px-6 py-4 whitespace-nowrap'>
-                            <span
-                              className={`px-2 py-1 text-xs rounded-full ${
-                                !user.banned
-                                  ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-300'
-                                  : 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-300'
-                              }`}
-                            >
-                              {!user.banned ? '正常' : '已封禁'}
-                            </span>
-                          </td>
-                          <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
-                            {formatUsageDuration(
-                              accessData[user.username]?.usage_total || 0
-                            )}
-                          </td>
-                          <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
-                            {(() => {
-                              const logs =
-                                accessData[user.username]?.logs || [];
-                              if (logs.length === 0) return '-';
-                              const latest = logs[0];
-                              return formatAccessTime(
-                                latest.last_active || latest.login_time
-                              );
-                            })()}
-                          </td>
-                          <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
-                            {accessData[user.username]?.logs?.[0]?.ip || '-'}
-                          </td>
-                          <td className='px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2'>
-                            {/* 访问记录按钮 */}
-                            <button
-                              onClick={() =>
-                                setExpandedUser(
-                                  expandedUser === user.username
-                                    ? null
-                                    : user.username
-                                )
-                              }
-                              className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 hover:bg-indigo-200 dark:bg-indigo-900/40 dark:hover:bg-indigo-900/60 dark:text-indigo-200 transition-colors'
-                            >
-                              {expandedUser === user.username
-                                ? '收起记录'
-                                : '访问记录'}
-                            </button>
-                            {/* 修改密码按钮 */}
-                            {canChangePassword && (
-                              <button
-                                onClick={() =>
-                                  handleShowChangePasswordForm(user.username)
-                                }
-                                className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/40 dark:hover:bg-blue-900/60 dark:text-blue-200 transition-colors'
-                              >
-                                修改密码
-                              </button>
-                            )}
-                            {canOperate && (
-                              <>
-                                {/* 其他操作按钮 */}
-                                {user.role === 'user' && (
-                                  <button
-                                    onClick={() =>
-                                      handleSetAdmin(user.username)
-                                    }
-                                    className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 hover:bg-purple-200 dark:bg-purple-900/40 dark:hover:bg-purple-900/60 dark:text-purple-200 transition-colors'
-                                  >
-                                    设为管理
-                                  </button>
-                                )}
-                                {user.role === 'admin' && (
-                                  <button
-                                    onClick={() =>
-                                      handleRemoveAdmin(user.username)
-                                    }
-                                    className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 hover:bg-gray-200 dark:bg-gray-700/40 dark:hover:bg-gray-700/60 dark:text-gray-200 transition-colors'
-                                  >
-                                    取消管理
-                                  </button>
-                                )}
-                                {user.role !== 'owner' &&
-                                  (!user.banned ? (
-                                    <button
-                                      onClick={() =>
-                                        handleBanUser(user.username)
-                                      }
-                                      className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:hover:bg-red-900/60 dark:text-red-300 transition-colors'
-                                    >
-                                      封禁
-                                    </button>
-                                  ) : (
-                                    <button
-                                      onClick={() =>
-                                        handleUnbanUser(user.username)
-                                      }
-                                      className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-900/40 dark:hover:bg-green-900/60 dark:text-green-300 transition-colors'
-                                    >
-                                      解封
-                                    </button>
-                                  ))}
-                              </>
-                            )}
-                            {/* 删除用户按钮 - 放在最后，使用更明显的红色样式 */}
-                            {canDeleteUser && (
-                              <button
-                                onClick={() => handleDeleteUser(user.username)}
-                                className='inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-red-600 text-white hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-700 transition-colors'
-                              >
-                                删除用户
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                        {/* 展开的访问记录详情行 */}
-                        {expandedUser === user.username && (
-                          <tr
-                            key={`${user.username}-access`}
-                            className='bg-gray-50 dark:bg-gray-900'
-                          >
-                            <td colSpan={8} className='px-6 py-4'>
-                              <div className='text-xs font-medium text-gray-500 dark:text-gray-400 mb-2'>
-                                最近访问记录（最多保留10次）
-                              </div>
-                              {(accessData[user.username]?.logs || [])
-                                .length === 0 ? (
-                                <div className='text-sm text-gray-400 dark:text-gray-500'>
-                                  暂无访问记录
-                                </div>
-                              ) : (
-                                <table className='min-w-full text-sm'>
-                                  <thead>
-                                    <tr className='text-left text-xs text-gray-500 dark:text-gray-400'>
-                                      <th className='py-1 pr-6 font-medium'>
-                                        上线时间
-                                      </th>
-                                      <th className='py-1 pr-6 font-medium'>
-                                        访问IP
-                                      </th>
-                                      <th className='py-1 pr-6 font-medium'>
-                                        本次在线时长
-                                      </th>
-                                      <th className='py-1 font-medium'>
-                                        最近活跃
-                                      </th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>
-                                    {(
-                                      accessData[user.username]?.logs || []
-                                    ).map((log, idx) => (
-                                      <tr key={idx}>
-                                        <td className='py-1.5 pr-6 text-gray-900 dark:text-gray-100'>
-                                          {formatAccessTime(log.login_time)}
-                                        </td>
-                                        <td className='py-1.5 pr-6 font-mono text-gray-900 dark:text-gray-100'>
-                                          {log.ip || '-'}
-                                        </td>
-                                        <td className='py-1.5 pr-6 text-gray-900 dark:text-gray-100'>
-                                          {formatUsageDuration(
-                                            Math.max(
-                                              0,
-                                              (log.last_active ||
-                                                log.login_time) - log.login_time
-                                            )
-                                          )}
-                                        </td>
-                                        <td className='py-1.5 text-gray-900 dark:text-gray-100'>
-                                          {formatAccessTime(log.last_active)}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              )}
-
-                              {/* 登录设备列表（设备数量超限时最早登录的设备失效） */}
-                              <div className='text-xs font-medium text-gray-500 dark:text-gray-400 mt-4 mb-2'>
-                                登录设备（共{' '}
-                                {
-                                  (accessData[user.username]?.devices || [])
-                                    .length
-                                }{' '}
-                                台）
-                              </div>
-                              {(accessData[user.username]?.devices || [])
-                                .length === 0 ? (
-                                <div className='text-sm text-gray-400 dark:text-gray-500'>
-                                  暂无登录设备
-                                </div>
-                              ) : (
-                                <table className='min-w-full text-sm'>
-                                  <thead>
-                                    <tr className='text-left text-xs text-gray-500 dark:text-gray-400'>
-                                      <th className='py-1 pr-6 font-medium'>
-                                        设备
-                                      </th>
-                                      <th className='py-1 pr-6 font-medium'>
-                                        最近登录
-                                      </th>
-                                      <th className='py-1 font-medium'>
-                                        设备标识
-                                      </th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>
-                                    {(
-                                      accessData[user.username]?.devices || []
-                                    ).map((device, idx) => (
-                                      <tr key={idx}>
-                                        <td className='py-1.5 pr-6 text-gray-900 dark:text-gray-100'>
-                                          {device.ua || '未知设备'}
-                                        </td>
-                                        <td className='py-1.5 pr-6 text-gray-900 dark:text-gray-100'>
-                                          {formatAccessTime(
-                                            Math.floor(
-                                              device.session_time / 1000
-                                            )
-                                          )}
-                                        </td>
-                                        <td className='py-1.5 font-mono text-xs text-gray-500 dark:text-gray-400'>
-                                          {String(device.device_id || '').slice(
-                                            0,
-                                            8
-                                          )}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              )}
-                            </td>
-                          </tr>
+            <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>
+              {sortedUsers.map((user) => {
+                return (
+                  <Fragment key={user.username}>
+                    <tr className='hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors'>
+                      <td className='px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100'>
+                        {user.username}
+                      </td>
+                      <td className='px-6 py-4 whitespace-nowrap'>
+                        {renderRoleBadge(user)}
+                      </td>
+                      <td className='px-6 py-4 whitespace-nowrap'>
+                        {renderStatusBadge(user)}
+                      </td>
+                      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
+                        {formatUsageDuration(
+                          accessData[user.username]?.usage_total || 0
                         )}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              );
-            })()}
+                      </td>
+                      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
+                        {(() => {
+                          const logs = accessData[user.username]?.logs || [];
+                          if (logs.length === 0) return '-';
+                          const latest = logs[0];
+                          return formatAccessTime(
+                            latest.last_active || latest.login_time
+                          );
+                        })()}
+                      </td>
+                      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
+                        {accessData[user.username]?.logs?.[0]?.ip || '-'}
+                      </td>
+                      <td className='px-6 py-4 whitespace-nowrap text-right text-sm font-medium'>
+                        {renderUserActions(user)}
+                      </td>
+                    </tr>
+                    {/* 展开的访问记录详情行 */}
+                    {expandedUser === user.username && (
+                      <tr
+                        key={`${user.username}-access`}
+                        className='bg-gray-50 dark:bg-gray-900'
+                      >
+                        <td colSpan={8} className='px-6 py-4'>
+                          {renderUserAccessPanel(user)}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
           </table>
+        </div>
+
+        {/* 移动端用户卡片列表（md 以下显示，免横向滚动） */}
+        <div className='md:hidden border border-gray-200 dark:border-gray-700 rounded-lg max-h-[28rem] overflow-y-auto p-2 space-y-2'>
+          {sortedUsers.map((user) => {
+            const logs = accessData[user.username]?.logs || [];
+            const lastOnline =
+              logs.length === 0
+                ? '-'
+                : formatAccessTime(logs[0].last_active || logs[0].login_time);
+            return (
+              <div
+                key={user.username}
+                className='bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3'
+              >
+                <div className='flex flex-wrap items-center gap-2'>
+                  <span className='text-sm font-medium text-gray-900 dark:text-gray-100 break-all'>
+                    {user.username}
+                  </span>
+                  {renderRoleBadge(user)}
+                  {renderStatusBadge(user)}
+                </div>
+                <div className='mt-1.5 text-xs text-gray-500 dark:text-gray-400 flex flex-wrap gap-x-3 gap-y-0.5'>
+                  <span>
+                    时长{' '}
+                    {formatUsageDuration(
+                      accessData[user.username]?.usage_total || 0
+                    )}
+                  </span>
+                  <span>上线 {lastOnline}</span>
+                  <span className='font-mono'>
+                    IP {accessData[user.username]?.logs?.[0]?.ip || '-'}
+                  </span>
+                </div>
+                <div className='mt-2.5'>{renderUserActions(user)}</div>
+                {expandedUser === user.username && (
+                  <div className='mt-3 pt-3 border-t border-gray-200 dark:border-gray-700'>
+                    {renderUserAccessPanel(user)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -1059,6 +1127,77 @@ const VideoSourceConfig = ({
     );
   };
 
+  // 移动端可拖拽卡片封装 (dnd-kit)
+  const DraggableCard = ({ source }: { source: DataSource }) => {
+    const { attributes, listeners, setNodeRef, transform, transition } =
+      useSortable({ id: source.key });
+    const style = {
+      transform: CSS.Transform.toString(transform),
+      transition,
+    } as React.CSSProperties;
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        className='bg-gray-50/80 dark:bg-gray-800/60 rounded-lg border border-gray-200 dark:border-gray-700 p-3 select-none'
+      >
+        <div className='flex items-center gap-2'>
+          <span
+            className='cursor-grab text-gray-400 shrink-0'
+            style={{ touchAction: 'none' }}
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical size={16} />
+          </span>
+          <span className='flex-1 min-w-0 text-sm font-medium text-gray-900 dark:text-gray-100 truncate'>
+            {source.name}
+          </span>
+          <span
+            className={`px-2 py-0.5 text-xs rounded-full shrink-0 ${
+              !source.disabled
+                ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-300'
+                : 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-300'
+            }`}
+          >
+            {!source.disabled ? '启用中' : '已禁用'}
+          </span>
+        </div>
+        <div className='mt-2 space-y-1 text-xs text-gray-500 dark:text-gray-400 min-w-0'>
+          <div className='truncate'>Key：{source.key}</div>
+          <div className='truncate' title={source.api}>
+            API：{source.api}
+          </div>
+          {source.detail && (
+            <div className='truncate' title={source.detail}>
+              Detail：{source.detail}
+            </div>
+          )}
+        </div>
+        <div className='flex flex-wrap gap-2 mt-2.5'>
+          <button
+            onClick={() => handleToggleEnable(source.key)}
+            className={`inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium ${
+              !source.disabled
+                ? 'bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900/60'
+                : 'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/60'
+            } transition-colors`}
+          >
+            {!source.disabled ? '禁用' : '启用'}
+          </button>
+          {source.from !== 'config' && (
+            <button
+              onClick={() => handleDelete(source.key)}
+              className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium bg-gray-100 text-gray-800 hover:bg-gray-200 dark:bg-gray-700/40 dark:hover:bg-gray-700/60 dark:text-gray-200 transition-colors'
+            >
+              删除
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   if (!config) {
     return (
       <div className='text-center text-gray-500 dark:text-gray-400'>
@@ -1134,8 +1273,8 @@ const VideoSourceConfig = ({
         </div>
       )}
 
-      {/* 视频源表格 */}
-      <div className='border border-gray-200 dark:border-gray-700 rounded-lg max-h-[28rem] overflow-y-auto overflow-x-auto'>
+      {/* 视频源表格（桌面端） */}
+      <div className='hidden md:block border border-gray-200 dark:border-gray-700 rounded-lg max-h-[28rem] overflow-y-auto overflow-x-auto'>
         <table className='min-w-full divide-y divide-gray-200 dark:divide-gray-700'>
           <thead className='bg-gray-50 dark:bg-gray-900'>
             <tr>
@@ -1179,6 +1318,26 @@ const VideoSourceConfig = ({
             </SortableContext>
           </DndContext>
         </table>
+      </div>
+
+      {/* 视频源卡片列表（移动端，可拖拽排序） */}
+      <div className='md:hidden border border-gray-200 dark:border-gray-700 rounded-lg max-h-[28rem] overflow-y-auto p-2 space-y-2'>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+          autoScroll={false}
+          modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+        >
+          <SortableContext
+            items={sources.map((s) => s.key)}
+            strategy={verticalListSortingStrategy}
+          >
+            {sources.map((source) => (
+              <DraggableCard key={source.key} source={source} />
+            ))}
+          </SortableContext>
+        </DndContext>
       </div>
 
       {/* 保存排序按钮 */}
@@ -1423,6 +1582,93 @@ const CategoryConfig = ({
     );
   };
 
+  // 移动端可拖拽卡片封装 (dnd-kit)
+  const DraggableCard = ({ category }: { category: CustomCategory }) => {
+    const { attributes, listeners, setNodeRef, transform, transition } =
+      useSortable({ id: `${category.query}:${category.type}` });
+    const style = {
+      transform: CSS.Transform.toString(transform),
+      transition,
+    } as React.CSSProperties;
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        className='bg-gray-50/80 dark:bg-gray-800/60 rounded-lg border border-gray-200 dark:border-gray-700 p-3 select-none'
+      >
+        <div className='flex items-center gap-2'>
+          <span
+            className={`shrink-0 ${
+              isD1Storage || isUpstashStorage
+                ? 'text-gray-400/40'
+                : 'cursor-grab text-gray-400'
+            }`}
+            style={{ touchAction: 'none' }}
+            {...(isD1Storage || isUpstashStorage
+              ? {}
+              : { ...attributes, ...listeners })}
+          >
+            <GripVertical size={16} />
+          </span>
+          <span className='flex-1 min-w-0 text-sm font-medium text-gray-900 dark:text-gray-100 truncate'>
+            {category.name || '-'}
+          </span>
+          <span
+            className={`px-2 py-0.5 text-xs rounded-full shrink-0 ${
+              category.type === 'movie'
+                ? 'bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300'
+                : 'bg-purple-100 dark:bg-purple-900/20 text-purple-800 dark:text-purple-300'
+            }`}
+          >
+            {category.type === 'movie' ? '电影' : '电视剧'}
+          </span>
+          <span
+            className={`px-2 py-0.5 text-xs rounded-full shrink-0 ${
+              !category.disabled
+                ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-300'
+                : 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-300'
+            }`}
+          >
+            {!category.disabled ? '启用中' : '已禁用'}
+          </span>
+        </div>
+        <div
+          className='mt-2 text-xs text-gray-500 dark:text-gray-400 truncate'
+          title={category.query}
+        >
+          关键词：{category.query}
+        </div>
+        <div className='flex flex-wrap gap-2 mt-2.5'>
+          <button
+            onClick={() =>
+              !isD1Storage &&
+              !isUpstashStorage &&
+              handleToggleEnable(category.query, category.type)
+            }
+            disabled={isD1Storage || isUpstashStorage}
+            className={`inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium ${
+              isD1Storage || isUpstashStorage
+                ? 'bg-gray-400 cursor-not-allowed text-white'
+                : !category.disabled
+                ? 'bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900/60'
+                : 'bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/60'
+            } transition-colors`}
+          >
+            {!category.disabled ? '禁用' : '启用'}
+          </button>
+          {category.from !== 'config' && !isD1Storage && !isUpstashStorage && (
+            <button
+              onClick={() => handleDelete(category.query, category.type)}
+              className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium bg-gray-100 text-gray-800 hover:bg-gray-200 dark:bg-gray-700/40 dark:hover:bg-gray-700/60 dark:text-gray-200 transition-colors'
+            >
+              删除
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   if (!config) {
     return (
       <div className='text-center text-gray-500 dark:text-gray-400'>
@@ -1510,8 +1756,8 @@ const CategoryConfig = ({
         </div>
       )}
 
-      {/* 分类表格 */}
-      <div className='border border-gray-200 dark:border-gray-700 rounded-lg max-h-[28rem] overflow-y-auto overflow-x-auto'>
+      {/* 分类表格（桌面端） */}
+      <div className='hidden md:block border border-gray-200 dark:border-gray-700 rounded-lg max-h-[28rem] overflow-y-auto overflow-x-auto'>
         <table className='min-w-full divide-y divide-gray-200 dark:divide-gray-700'>
           <thead className='bg-gray-50 dark:bg-gray-900'>
             <tr>
@@ -1555,6 +1801,29 @@ const CategoryConfig = ({
             </SortableContext>
           </DndContext>
         </table>
+      </div>
+
+      {/* 分类卡片列表（移动端，可拖拽排序） */}
+      <div className='md:hidden border border-gray-200 dark:border-gray-700 rounded-lg max-h-[28rem] overflow-y-auto p-2 space-y-2'>
+        <DndContext
+          sensors={isD1Storage || isUpstashStorage ? [] : sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+          autoScroll={false}
+          modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+        >
+          <SortableContext
+            items={categories.map((c) => `${c.query}:${c.type}`)}
+            strategy={verticalListSortingStrategy}
+          >
+            {categories.map((category) => (
+              <DraggableCard
+                key={`${category.query}:${category.type}`}
+                category={category}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
       </div>
 
       {/* 保存排序按钮 */}
