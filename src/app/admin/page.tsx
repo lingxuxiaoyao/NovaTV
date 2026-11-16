@@ -22,10 +22,14 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import {
+  Check,
   ChevronDown,
   ChevronUp,
+  Copy,
   FolderOpen,
   GripVertical,
+  Loader2,
+  RefreshCw,
   Settings,
   Users,
   Video,
@@ -50,6 +54,22 @@ const showSuccess = (message: string) =>
     timer: 2000,
     showConfirmButton: false,
   });
+
+// 美化版弹窗(淡入淡出、无回弹动画、主题按钮、深色适配)
+// 目前用于:修改密码、设备上限、系统更新相关确认
+const styledSwal = Swal.mixin({
+  buttonsStyling: false,
+  showClass: { popup: 'admin-swal-in', backdrop: 'admin-swal-backdrop' },
+  hideClass: { popup: 'admin-swal-out', backdrop: 'admin-swal-backdrop' },
+  customClass: {
+    popup: 'admin-swal-popup',
+    title: 'admin-swal-title',
+    htmlContainer: 'admin-swal-html',
+    input: 'admin-swal-input',
+    confirmButton: 'admin-swal-btn admin-swal-btn-primary',
+    cancelButton: 'admin-swal-btn admin-swal-btn-secondary',
+  },
+});
 
 // 新增站点配置类型
 interface SiteConfig {
@@ -133,12 +153,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
     enableRegistration: false,
   });
   const [showAddUserForm, setShowAddUserForm] = useState(false);
-  const [showChangePasswordForm, setShowChangePasswordForm] = useState(false);
   const [newUser, setNewUser] = useState({
-    username: '',
-    password: '',
-  });
-  const [changePasswordUser, setChangePasswordUser] = useState({
     username: '',
     password: '',
   });
@@ -262,21 +277,23 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
     setShowAddUserForm(false);
   };
 
-  const handleChangePassword = async () => {
-    if (!changePasswordUser.username || !changePasswordUser.password) return;
-    await handleUserAction(
-      'changePassword',
-      changePasswordUser.username,
-      changePasswordUser.password
-    );
-    setChangePasswordUser({ username: '', password: '' });
-    setShowChangePasswordForm(false);
-  };
-
-  const handleShowChangePasswordForm = (username: string) => {
-    setChangePasswordUser({ username, password: '' });
-    setShowChangePasswordForm(true);
-    setShowAddUserForm(false); // 关闭添加用户表单
+  // 修改用户密码(弹框形式)
+  const handleSetPassword = async (username: string) => {
+    const { value } = await styledSwal.fire({
+      title: '修改用户密码',
+      inputLabel: `为用户 ${username} 设置新密码`,
+      input: 'password',
+      inputPlaceholder: '请输入新密码',
+      showCancelButton: true,
+      confirmButtonText: '确认修改',
+      cancelButtonText: '取消',
+      inputValidator: (input) => {
+        if (!input) return '请输入新密码';
+        return null;
+      },
+    });
+    if (!value) return;
+    await handleUserAction('changePassword', username, value);
   };
 
   const handleDeleteUser = async (username: string) => {
@@ -343,7 +360,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
     const currentLimit =
       config?.UserConfig.Users.find((u) => u.username === username)
         ?.device_limit ?? 0;
-    const { value } = await Swal.fire({
+    const { value } = await styledSwal.fire({
       title: '设置登录设备上限',
       input: 'number',
       inputLabel: `用户 ${username} 可同时登录的设备数量（0 表示不限制）`,
@@ -465,7 +482,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
         {/* 修改密码按钮 */}
         {canChangePassword && (
           <button
-            onClick={() => handleShowChangePasswordForm(user.username)}
+            onClick={() => handleSetPassword(user.username)}
             className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/40 dark:hover:bg-blue-900/60 dark:text-blue-200 transition-colors'
           >
             修改密码
@@ -682,13 +699,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
             用户列表
           </h4>
           <button
-            onClick={() => {
-              setShowAddUserForm(!showAddUserForm);
-              if (showChangePasswordForm) {
-                setShowChangePasswordForm(false);
-                setChangePasswordUser({ username: '', password: '' });
-              }
-            }}
+            onClick={() => setShowAddUserForm(!showAddUserForm)}
             className='px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg transition-colors'
           >
             {showAddUserForm ? '取消' : '添加用户'}
@@ -723,52 +734,6 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                 className='w-full sm:w-auto px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white rounded-lg transition-colors'
               >
                 添加
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* 修改密码表单 */}
-        {showChangePasswordForm && (
-          <div className='mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-700'>
-            <h5 className='text-sm font-medium text-blue-800 dark:text-blue-300 mb-3'>
-              修改用户密码
-            </h5>
-            <div className='flex flex-col sm:flex-row gap-4 sm:gap-3'>
-              <input
-                type='text'
-                placeholder='用户名'
-                value={changePasswordUser.username}
-                disabled
-                className='flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 cursor-not-allowed'
-              />
-              <input
-                type='password'
-                placeholder='新密码'
-                value={changePasswordUser.password}
-                onChange={(e) =>
-                  setChangePasswordUser((prev) => ({
-                    ...prev,
-                    password: e.target.value,
-                  }))
-                }
-                className='flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent'
-              />
-              <button
-                onClick={handleChangePassword}
-                disabled={!changePasswordUser.password}
-                className='w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors'
-              >
-                修改密码
-              </button>
-              <button
-                onClick={() => {
-                  setShowChangePasswordForm(false);
-                  setChangePasswordUser({ username: '', password: '' });
-                }}
-                className='w-full sm:w-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors'
-              >
-                取消
               </button>
             </div>
           </div>
@@ -2179,6 +2144,579 @@ const SiteConfigComponent = ({ config }: { config: AdminConfig | null }) => {
   );
 };
 
+// ============ 系统更新(仅站长可见) ============
+
+interface UpdateCapabilities {
+  updateLatest: boolean;
+  switchVersion: boolean;
+  channel: 'watchtower' | 'vercel' | 'cloudflare' | 'docker' | null;
+}
+
+interface UpdateCheckResult {
+  platform: 'docker' | 'vercel' | 'cloudflare' | 'unknown';
+  capabilities: UpdateCapabilities;
+  currentVersion: string;
+  latestVersion: string | null;
+  hasUpdate: boolean | null;
+  manualGuide?: string;
+}
+
+interface UpdateVersionEntry {
+  sha: string;
+  short: string;
+  date: string;
+  tag: string | null;
+  isCurrent: boolean;
+  isLatest: boolean;
+  count: number;
+  commits: { short: string; message: string; date: string }[];
+}
+
+// YYYYMMDDHHMMSS -> 可读时间
+const formatVersionTime = (v: string) =>
+  v.length === 14
+    ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)} ${v.slice(
+        8,
+        10
+      )}:${v.slice(10, 12)}`
+    : v;
+
+const formatRelativeTime = (dateStr: string) => {
+  const diff = Date.now() - Date.parse(dateStr);
+  if (Number.isNaN(diff)) return '';
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return '刚刚';
+  if (min < 60) return `${min}分钟前`;
+  const hour = Math.floor(min / 60);
+  if (hour < 24) return `${hour}小时前`;
+  const day = Math.floor(hour / 24);
+  if (day < 30) return `${day}天前`;
+  return `${Math.floor(day / 30)}个月前`;
+};
+
+const genRandomToken = () => {
+  const arr = new Uint8Array(16);
+  crypto.getRandomValues(arr);
+  return Array.from(arr)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+};
+
+const CopyButton = ({ text }: { text: string }) => {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          showError('复制失败,请手动选择文本复制');
+        }
+      }}
+      className='inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors'
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+      {copied ? '已复制' : '复制'}
+    </button>
+  );
+};
+
+const SnippetBlock = ({ text, label }: { text: string; label?: string }) => (
+  <div className='mb-3'>
+    {label && (
+      <div className='flex items-center justify-between mb-1'>
+        <span className='text-xs text-gray-500 dark:text-gray-400'>
+          {label}
+        </span>
+        <CopyButton text={text} />
+      </div>
+    )}
+    <pre className='whitespace-pre-wrap font-mono text-xs bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300 rounded-lg p-3 overflow-x-auto'>
+      {text}
+    </pre>
+  </div>
+);
+
+// 配置引导(按平台显示对应教程,文案与 README 同源)
+const GUIDE_PLATFORMS = [
+  { key: 'docker', label: 'Docker' },
+  { key: 'vercel', label: 'Vercel' },
+  { key: 'cloudflare', label: 'Cloudflare' },
+] as const;
+
+const UpdateGuide = ({
+  platform,
+  onRecheck,
+}: {
+  platform: 'docker' | 'vercel' | 'cloudflare' | 'unknown';
+  onRecheck: () => void;
+}) => {
+  const [selected, setSelected] = useState<
+    'docker' | 'vercel' | 'cloudflare' | 'unknown'
+  >(platform === 'unknown' ? 'docker' : platform);
+  const [token, setToken] = useState(() => genRandomToken());
+
+  const dockerCompose = `services 里新增 watchtower 服务(与应用同网络):
+
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    environment:
+      - WATCHTOWER_HTTP_API_ENABLE=true
+      - WATCHTOWER_HTTP_API_TOKEN=${token}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock`;
+
+  const dockerEnv = `应用容器新增环境变量:
+
+  WATCHTOWER_API_URL=http://watchtower:8080
+  WATCHTOWER_API_TOKEN=${token}`;
+
+  const dockerSock = `可选 - 支持页面切换历史版本(应用容器添加挂载):
+
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+
+  ⚠️ socket 等于宿主机 root 权限,不挂载不影响"更新到最新"`;
+
+  const vercelSteps = `1. Vercel 项目 → Settings → Git → Deploy Hooks → Create Hook
+2. 复制生成的 Hook URL
+3. Settings → Environment Variables 添加:
+   VERCEL_DEPLOY_HOOK_URL = 刚才的 URL
+4. 重新部署一次使环境变量生效`;
+
+  const cfSteps = `1. Pages 项目 → Settings → Webhooks → Add Deploy Hook
+2. 复制生成的 Hook URL
+3. Settings → Environment variables 添加:
+   CF_PAGES_DEPLOY_HOOK_URL = 刚才的 URL
+4. 重新部署一次生效`;
+
+  return (
+    <div className='mt-4 rounded-lg border border-dashed border-gray-300 dark:border-gray-600 p-4'>
+      <div className='text-sm font-medium text-gray-800 dark:text-gray-200 mb-3'>
+        ⚙ 如何启用一键更新
+      </div>
+      <div className='flex items-center gap-2 mb-3'>
+        {GUIDE_PLATFORMS.map((p) => (
+          <button
+            key={p.key}
+            onClick={() => setSelected(p.key)}
+            className={`px-2.5 py-1 rounded-full text-xs transition-colors ${
+              selected === p.key
+                ? 'bg-green-600 text-white'
+                : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+        {selected === 'docker' && (
+          <button
+            onClick={() => setToken(genRandomToken())}
+            className='ml-auto inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/40 dark:text-blue-200 transition-colors'
+          >
+            <RefreshCw size={12} className='mr-1' />
+            重新生成 Token
+          </button>
+        )}
+      </div>
+
+      {selected === 'docker' && (
+        <>
+          <SnippetBlock text={dockerCompose} label='① docker-compose.yml' />
+          <SnippetBlock text={dockerEnv} label='② 应用环境变量' />
+          <SnippetBlock text={dockerSock} label='③ 历史版本切换(可选)' />
+        </>
+      )}
+      {selected === 'vercel' && (
+        <SnippetBlock text={vercelSteps} label='配置步骤' />
+      )}
+      {selected === 'cloudflare' && (
+        <SnippetBlock text={cfSteps} label='配置步骤' />
+      )}
+
+      <div className='flex items-center justify-between mt-2'>
+        <span className='text-xs text-gray-400 dark:text-gray-500'>
+          配置后需重启/重新部署生效
+        </span>
+        <button
+          onClick={onRecheck}
+          className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium bg-green-600 hover:bg-green-700 text-white transition-colors'
+        >
+          我已配置完成,重新检测
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const SystemUpdateTab = () => {
+  const [checking, setChecking] = useState(false);
+  const [checkResult, setCheckResult] = useState<UpdateCheckResult | null>(
+    null
+  );
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const [versions, setVersions] = useState<UpdateVersionEntry[]>([]);
+  const [loadingVersions, setLoadingVersions] = useState(false);
+  const [expandedVersion, setExpandedVersion] = useState<string | null>(null);
+  const [updating, setUpdating] = useState<string | null>(null);
+  const [polling, setPolling] = useState(false);
+  const [pollMsg, setPollMsg] = useState<string | null>(null);
+  const [showGuide, setShowGuide] = useState(false);
+
+  const doCheck = useCallback(async () => {
+    setChecking(true);
+    setCheckError(null);
+    try {
+      const res = await fetch('/api/admin/update?action=check');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '检查失败');
+      setCheckResult(data as UpdateCheckResult);
+    } catch (e) {
+      setCheckError(e instanceof Error ? e.message : '检查更新失败');
+    } finally {
+      setChecking(false);
+    }
+  }, []);
+
+  const doLoadVersions = useCallback(async () => {
+    setLoadingVersions(true);
+    try {
+      const res = await fetch('/api/admin/update?action=changelog');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '获取版本历史失败');
+      const list = (data.versions || []) as UpdateVersionEntry[];
+      setVersions(list);
+      // 最新一版默认展开
+      if (list.length) setExpandedVersion(list[0].sha);
+    } catch (e) {
+      console.error('获取版本历史失败:', e);
+    } finally {
+      setLoadingVersions(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    doCheck();
+    doLoadVersions();
+  }, [doCheck, doLoadVersions]);
+
+  // 触发更新后轮询版本号,变化即刷新页面
+  const pollForRestart = (baseline: string, actionLabel: string) => {
+    setPolling(true);
+    setPollMsg(`${actionLabel}已触发,站点将短暂重启,正在等待新版本上线…`);
+    let tries = 0;
+    const timer = setInterval(async () => {
+      tries++;
+      try {
+        const res = await fetch('/api/admin/update?action=check');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.currentVersion && data.currentVersion !== baseline) {
+            clearInterval(timer);
+            setPolling(false);
+            setPollMsg(null);
+            showSuccess('更新完成,即将刷新页面');
+            setTimeout(() => window.location.reload(), 1200);
+            return;
+          }
+        }
+      } catch {
+        /* 重启期间请求失败属正常,继续轮询 */
+      }
+      if (tries >= 30) {
+        clearInterval(timer);
+        setPolling(false);
+        setPollMsg('迟迟未检测到新版本上线,请检查更新通道日志后手动刷新');
+      }
+    }, 8000);
+  };
+
+  const handleUpdateLatest = async () => {
+    if (!checkResult?.capabilities.updateLatest) return;
+    const { isConfirmed } = await styledSwal.fire({
+      title: '更新到最新版本',
+      text: '站点将短暂重启(通常 1 分钟内),确认现在更新吗?',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: '立即更新',
+      cancelButtonText: '取消',
+    });
+    if (!isConfirmed) return;
+    setUpdating('latest');
+    try {
+      const res = await fetch('/api/admin/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'updateLatest' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '更新失败');
+      pollForRestart(checkResult.currentVersion, '更新');
+    } catch (e) {
+      showError(e instanceof Error ? e.message : '更新失败');
+    } finally {
+      setUpdating(null);
+    }
+  };
+
+  const handleSwitchVersion = async (v: UpdateVersionEntry) => {
+    if (!checkResult?.capabilities.switchVersion || !v.tag) return;
+    const { isConfirmed } = await styledSwal.fire({
+      title: `切换到 ${v.tag}`,
+      text: '将拉取该版本镜像并重建容器,站点会短暂重启。切回旧版本后可随时再更新到最新。',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: '确认切换',
+      cancelButtonText: '取消',
+    });
+    if (!isConfirmed) return;
+    setUpdating(v.tag);
+    try {
+      const res = await fetch('/api/admin/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'updateVersion', version: v.tag }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '切换失败');
+      pollForRestart(checkResult.currentVersion, '版本切换');
+    } catch (e) {
+      showError(e instanceof Error ? e.message : '切换失败');
+    } finally {
+      setUpdating(null);
+    }
+  };
+
+  const caps = checkResult?.capabilities;
+  const guideNeeded =
+    checkResult &&
+    (!caps?.updateLatest ||
+      (checkResult.platform === 'docker' && !caps?.switchVersion));
+
+  const statusBadge = () => {
+    if (checking)
+      return (
+        <span className='inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'>
+          <Loader2 size={12} className='animate-spin' />
+          检查中
+        </span>
+      );
+    if (checkError)
+      return (
+        <span className='px-2.5 py-1 rounded-full text-xs bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'>
+          检查失败
+        </span>
+      );
+    if (checkResult?.hasUpdate)
+      return (
+        <span className='px-2.5 py-1 rounded-full text-xs bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'>
+          有新版本 {checkResult.latestVersion}
+        </span>
+      );
+    if (checkResult)
+      return (
+        <span className='px-2.5 py-1 rounded-full text-xs bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300'>
+          已是最新
+        </span>
+      );
+    return null;
+  };
+
+  return (
+    <div className='space-y-4'>
+      {/* 版本状态卡片 */}
+      <div className='rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4'>
+        <div className='flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3'>
+          <div>
+            <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
+              当前版本
+            </div>
+            <div className='text-xs text-gray-500 dark:text-gray-400 font-mono mt-1'>
+              {checkResult
+                ? formatVersionTime(checkResult.currentVersion)
+                : '加载中…'}
+            </div>
+          </div>
+          <div className='flex flex-wrap items-center gap-2'>
+            {statusBadge()}
+            <button
+              onClick={doCheck}
+              disabled={checking}
+              className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 disabled:opacity-50 transition-colors'
+            >
+              <RefreshCw
+                size={12}
+                className={`mr-1 ${checking ? 'animate-spin' : ''}`}
+              />
+              检查更新
+            </button>
+            <button
+              onClick={handleUpdateLatest}
+              disabled={!caps?.updateLatest || updating !== null || polling}
+              className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-lg text-xs font-medium bg-green-600 hover:bg-green-700 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors'
+              title={
+                caps?.updateLatest
+                  ? ''
+                  : '未配置更新通道,请展开下方「如何启用一键更新」'
+              }
+            >
+              {updating === 'latest' ? (
+                <Loader2 size={12} className='mr-1 animate-spin' />
+              ) : null}
+              更新到最新
+            </button>
+          </div>
+        </div>
+
+        {(pollMsg || checkError) && (
+          <div
+            className={`mt-3 text-xs px-3 py-2 rounded-md ${
+              checkError
+                ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+                : 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300'
+            }`}
+          >
+            {checkError || pollMsg}
+          </div>
+        )}
+
+        {checkResult && guideNeeded && (
+          <>
+            {!showGuide ? (
+              <button
+                onClick={() => setShowGuide(true)}
+                className='mt-3 text-xs text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-400 underline underline-offset-2 transition-colors'
+              >
+                ⚙ 如何启用一键更新?
+              </button>
+            ) : (
+              <UpdateGuide
+                platform={checkResult.platform}
+                onRecheck={() => {
+                  doCheck();
+                  setShowGuide(false);
+                }}
+              />
+            )}
+          </>
+        )}
+      </div>
+
+      {/* 版本历史 */}
+      <div>
+        <div className='text-sm font-medium text-gray-800 dark:text-gray-200 mb-2'>
+          版本历史
+          <span className='ml-2 text-xs font-normal text-gray-400'>
+            最多展示最近 10 个已构建版本
+          </span>
+        </div>
+        {loadingVersions ? (
+          <div className='flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 px-3 py-3'>
+            <Loader2 size={14} className='animate-spin' />
+            正在获取版本历史…
+          </div>
+        ) : versions.length === 0 ? (
+          <div className='text-xs text-gray-500 dark:text-gray-400 px-3 py-3'>
+            暂无版本历史(镜像仍在构建或 GitHub 接口受限)
+          </div>
+        ) : (
+          <div className='space-y-2'>
+            {versions.map((v) => (
+              <div
+                key={v.sha}
+                className='rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 overflow-hidden'
+              >
+                <button
+                  onClick={() =>
+                    setExpandedVersion(expandedVersion === v.sha ? null : v.sha)
+                  }
+                  className='w-full flex items-center gap-2 px-3 py-2.5 min-h-[44px] text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors'
+                >
+                  <ChevronDown
+                    size={14}
+                    className={`shrink-0 text-gray-400 transition-transform ${
+                      expandedVersion === v.sha ? 'rotate-180' : ''
+                    }`}
+                  />
+                  <span className='font-mono text-xs text-gray-700 dark:text-gray-300'>
+                    {v.tag}
+                  </span>
+                  <span className='text-xs text-gray-400 dark:text-gray-500'>
+                    {formatRelativeTime(v.date)}
+                  </span>
+                  <span className='px-2 py-0.5 rounded-full text-[10px] bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'>
+                    {v.count} 项更新
+                  </span>
+                  <span className='ml-auto flex items-center gap-1.5'>
+                    {v.isCurrent && (
+                      <span className='px-2 py-0.5 rounded-full text-[10px] bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'>
+                        当前版本
+                      </span>
+                    )}
+                    {v.isLatest && (
+                      <span className='px-2 py-0.5 rounded-full text-[10px] bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'>
+                        最新
+                      </span>
+                    )}
+                  </span>
+                </button>
+                {expandedVersion === v.sha && (
+                  <div className='px-4 py-3 border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50'>
+                    {v.commits.map((c) => (
+                      <div
+                        key={c.short}
+                        className='flex gap-2 text-xs py-1 text-gray-600 dark:text-gray-300'
+                      >
+                        <span className='font-mono text-gray-400 dark:text-gray-500 shrink-0'>
+                          {c.short}
+                        </span>
+                        <span>{c.message}</span>
+                      </div>
+                    ))}
+                    <div className='mt-2 flex items-center gap-2'>
+                      {caps?.switchVersion &&
+                        v.tag &&
+                        !v.isCurrent &&
+                        !v.isLatest && (
+                          <button
+                            onClick={() => handleSwitchVersion(v)}
+                            disabled={updating !== null || polling}
+                            className='inline-flex items-center px-3 py-1.5 min-h-[32px] rounded-lg text-xs font-medium bg-teal-600 hover:bg-teal-700 text-white disabled:opacity-50 transition-colors'
+                          >
+                            {updating === v.tag ? (
+                              <Loader2
+                                size={12}
+                                className='mr-1 animate-spin'
+                              />
+                            ) : null}
+                            切换到此版本
+                          </button>
+                        )}
+                      {v.isLatest && checkResult?.hasUpdate && (
+                        <span className='text-xs text-gray-400 dark:text-gray-500'>
+                          使用上方「更新到最新」按钮升级到此版本
+                        </span>
+                      )}
+                      {v.isCurrent && (
+                        <span className='text-xs text-gray-400 dark:text-gray-500'>
+                          正在运行此版本
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 function AdminPageClient() {
   const [config, setConfig] = useState<AdminConfig | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2189,6 +2727,7 @@ function AdminPageClient() {
     videoSource: false,
     siteConfig: false,
     categoryConfig: false,
+    systemUpdate: false,
   });
 
   // 获取管理员配置
@@ -2360,6 +2899,23 @@ function AdminPageClient() {
             >
               <CategoryConfig config={config} refreshConfig={fetchConfig} />
             </CollapsibleTab>
+
+            {/* 系统更新标签(仅站长) */}
+            {role === 'owner' && (
+              <CollapsibleTab
+                title='系统更新'
+                icon={
+                  <RefreshCw
+                    size={20}
+                    className='text-gray-600 dark:text-gray-400'
+                  />
+                }
+                isExpanded={expandedTabs.systemUpdate}
+                onToggle={() => toggleTab('systemUpdate')}
+              >
+                <SystemUpdateTab />
+              </CollapsibleTab>
+            )}
           </div>
         </div>
       </div>

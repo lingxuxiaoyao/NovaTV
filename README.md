@@ -31,6 +31,7 @@
 - 🔐 **鉴权安全加固**：引入基于 Web Crypto API 的 HMAC-SHA256 签名校验与常量时间防计时攻击比对。
 - ⚡ **单源超时隔离与测速排序**：聚合搜索与详情接口支持单源独立超时控制与 `Promise.allSettled` 容错隔离，并按资源站响应延迟从快到慢排序。
 - 🚀 **M3U8 并发测速与安全进度同步**：新增 M3U8 首包并发测速模块与消除闭包陈旧状态的 `useSafePlayHistory` 播放进度同步 Hook。
+- 🔄 **站长面板一键更新**：检查新版本、查看每个版本的更新内容、一键升级到最新；Docker 部署还支持在页面切换/回滚到任意历史版本。
 
 <details>
   <summary>点击查看项目截图</summary>
@@ -47,6 +48,7 @@
 - [环境变量](#环境变量)
 - [配置说明](#配置说明)
 - [管理员配置](#管理员配置)
+- [系统更新(一键更新)](#系统更新一键更新)
 - [AndroidTV 使用](#AndroidTV-使用)
 - [Roadmap](#roadmap)
 - [安全与隐私提醒](#安全与隐私提醒)
@@ -210,21 +212,26 @@ networks:
 
 ## 环境变量
 
-| 变量                              | 说明                                         | 可选值                           | 默认值                                                                                                                     |
-| --------------------------------- | -------------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| USERNAME                          | 非 localstorage 部署时的管理员账号           | 任意字符串                       | （空）                                                                                                                     |
-| PASSWORD                          | 非 localstorage 部署时为管理员密码           | 任意字符串                       | （空）                                                                                                                     |
-| SITE_NAME                         | 站点名称                                     | 任意字符串                       | NovaTV                                                                                                                     |
-| ANNOUNCEMENT                      | 站点公告                                     | 任意字符串                       | 本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。 |
-| NEXT_PUBLIC_STORAGE_TYPE          | 播放记录/收藏的存储方式                      | localstorage、redis、d1、upstash | localstorage                                                                                                               |
-| REDIS_URL                         | redis 连接 url                               | 连接 url                         | 空                                                                                                                         |
-| UPSTASH_URL                       | upstash redis 连接 url                       | 连接 url                         | 空                                                                                                                         |
-| UPSTASH_TOKEN                     | upstash redis 连接 token                     | 连接 token                       | 空                                                                                                                         |
-| NEXT_PUBLIC_ENABLE_REGISTER       | 是否开放注册，仅在非 localstorage 部署时生效 | true / false                     | false                                                                                                                      |
-| NEXT_PUBLIC_SEARCH_MAX_PAGE       | 搜索接口可拉取的最大页数                     | 1-50                             | 5                                                                                                                          |
-| NEXT_PUBLIC_IMAGE_PROXY           | 默认的浏览器端图片代理                       | url prefix                       | (空)                                                                                                                       |
-| NEXT_PUBLIC_DOUBAN_PROXY          | 默认的浏览器端豆瓣数据代理                   | url prefix                       | (空)                                                                                                                       |
-| NEXT_PUBLIC_DISABLE_YELLOW_FILTER | 关闭色情内容过滤                             | true/false                       | false                                                                                                                      |
+| 变量                              | 说明                                            | 可选值                           | 默认值                                                                                                                     |
+| --------------------------------- | ----------------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| USERNAME                          | 非 localstorage 部署时的管理员账号              | 任意字符串                       | （空）                                                                                                                     |
+| PASSWORD                          | 非 localstorage 部署时为管理员密码              | 任意字符串                       | （空）                                                                                                                     |
+| SITE_NAME                         | 站点名称                                        | 任意字符串                       | NovaTV                                                                                                                     |
+| ANNOUNCEMENT                      | 站点公告                                        | 任意字符串                       | 本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。 |
+| NEXT_PUBLIC_STORAGE_TYPE          | 播放记录/收藏的存储方式                         | localstorage、redis、d1、upstash | localstorage                                                                                                               |
+| REDIS_URL                         | redis 连接 url                                  | 连接 url                         | 空                                                                                                                         |
+| UPSTASH_URL                       | upstash redis 连接 url                          | 连接 url                         | 空                                                                                                                         |
+| UPSTASH_TOKEN                     | upstash redis 连接 token                        | 连接 token                       | 空                                                                                                                         |
+| NEXT_PUBLIC_ENABLE_REGISTER       | 是否开放注册，仅在非 localstorage 部署时生效    | true / false                     | false                                                                                                                      |
+| NEXT_PUBLIC_SEARCH_MAX_PAGE       | 搜索接口可拉取的最大页数                        | 1-50                             | 5                                                                                                                          |
+| NEXT_PUBLIC_IMAGE_PROXY           | 默认的浏览器端图片代理                          | url prefix                       | (空)                                                                                                                       |
+| NEXT_PUBLIC_DOUBAN_PROXY          | 默认的浏览器端豆瓣数据代理                      | url prefix                       | (空)                                                                                                                       |
+| NEXT_PUBLIC_DISABLE_YELLOW_FILTER | 关闭色情内容过滤                                | true/false                       | false                                                                                                                      |
+| WATCHTOWER_API_URL                | Watchtower HTTP API 地址(Docker 一键更新通道)   | url                              | 空                                                                                                                         |
+| WATCHTOWER_API_TOKEN              | 与 Watchtower 的 WATCHTOWER_HTTP_API_TOKEN 一致 | 任意字符串                       | 空                                                                                                                         |
+| VERCEL_DEPLOY_HOOK_URL            | Vercel Deploy Hook,配置后可页面触发重新部署     | url                              | 空                                                                                                                         |
+| CF_PAGES_DEPLOY_HOOK_URL          | Cloudflare Pages Deploy Hook,同上               | url                              | 空                                                                                                                         |
+| GITHUB_TOKEN                      | 可选,仓库转私有后查版本历史需要                 | token                            | 空                                                                                                                         |
 
 > 登录设备数量限制：在管理后台按用户单独配置（默认 0 = 不限制，超出上限时最早登录的设备失效），不再使用环境变量。
 
@@ -285,6 +292,60 @@ NovaTV 支持标准的苹果 CMS V10 API 格式。
 
 站长或管理员访问 `/admin` 即可进行管理员配置
 
+## 系统更新(一键更新)
+
+站长面板 → 系统更新:查看当前版本、检查新版本、浏览每个版本的更新内容,并可一键升级。未配置更新通道时,页面会显示与部署方式匹配的手动更新命令。
+
+### Docker 部署
+
+**更新到最新**(docker-compose.yml 追加):
+
+```yaml
+services:
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    environment:
+      - WATCHTOWER_HTTP_API_ENABLE=true
+      - WATCHTOWER_HTTP_API_TOKEN=自行生成一段随机字符串
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # 与应用容器在同一网络,无需 ports 映射
+```
+
+应用容器新增环境变量(与上面 token 保持一致):
+
+```env
+WATCHTOWER_API_URL=http://watchtower:8080
+WATCHTOWER_API_TOKEN=同上
+```
+
+**切换历史版本**(可选):给应用容器挂载 `/var/run/docker.sock:/var/run/docker.sock`。
+
+> ⚠️ 挂载 socket 相当于授予宿主机 root 权限,仅在需要页面回滚版本时添加;不挂载不影响"更新到最新"。
+
+### Vercel 部署
+
+1. Settings → Git → Deploy Hooks → Create Hook,复制 URL
+2. Settings → Environment Variables 添加 `VERCEL_DEPLOY_HOOK_URL`
+3. 重新部署一次生效
+
+> 连接了 Git 仓库的 Vercel 本身就会随 push 自动部署,Deploy Hook 用于在页面手动触发重建(如自动部署被暂停时)。
+
+### Cloudflare Pages 部署
+
+1. Pages 项目 → Settings → Webhooks → Add Deploy Hook,复制 URL
+2. Settings → Environment variables 添加 `CF_PAGES_DEPLOY_HOOK_URL`
+3. 重新部署一次生效
+
+> 同理,Git 连接的 Pages 项目随 push 自动构建,Hook 是手动触发兜底。
+
+### 常见问题
+
+- **没配任何通道**:页面按钮不出现,显示对应部署方式的手动命令(Docker 为 `docker compose pull && docker compose up -d`)
+- **更新无变化**:镜像可能仍在 CI 构建(每笔 push 约 5-10 分钟),稍后重试
+- **私有仓库**:版本历史接口需配置 `GITHUB_TOKEN`
+
 ## AndroidTV 使用
 
 目前该项目可以配合 [OrionTV](https://github.com/zimplexing/OrionTV) 在 Android TV 上使用，可以直接作为 OrionTV 后端
@@ -322,7 +383,7 @@ NovaTV 支持标准的苹果 CMS V10 API 格式。
 
 ## License
 
-[MIT](LICENSE) © 2025 MoonTV & Contributors
+[MIT](LICENSE) © 2026 NovaTV
 
 ## 致谢
 
