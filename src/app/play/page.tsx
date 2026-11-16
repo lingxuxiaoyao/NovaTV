@@ -152,6 +152,9 @@ function PlayPageClient() {
   const lastVolumeRef = useRef<number>(0.7);
   // 上次使用的播放速率，默认 1.0
   const lastPlaybackRateRef = useRef<number>(1.0);
+  // 触摸端双击快进/快退状态
+  const lastTapRef = useRef<{ time: number; x: number }>({ time: 0, x: 0 });
+  const dblclickHandlerRef = useRef<((e: Event) => void) | null>(null);
 
   // 换源相关状态
   const [availableSources, setAvailableSources] = useState<SearchResult[]>([]);
@@ -159,6 +162,12 @@ function PlayPageClient() {
   const [sourceSearchError, setSourceSearchError] = useState<string | null>(
     null
   );
+  // 换源列表快照（供全屏播放器 settings 构建读取，避免闭包陈旧）
+  const availableSourcesRef = useRef<SearchResult[]>([]);
+
+  useEffect(() => {
+    availableSourcesRef.current = availableSources;
+  }, [availableSources]);
 
   // 优选和测速开关
   const [optimizationEnabled] = useState<boolean>(() => {
@@ -179,6 +188,14 @@ function PlayPageClient() {
   const [precomputedVideoInfo, setPrecomputedVideoInfo] = useState<
     Map<string, { quality: string; loadSpeed: string; pingTime: number }>
   >(new Map());
+  // 测速结果快照（供全屏播放器 settings 构建读取，避免闭包陈旧）
+  const precomputedVideoInfoRef = useRef<
+    Map<string, { quality: string; loadSpeed: string; pingTime: number }>
+  >(new Map());
+
+  useEffect(() => {
+    precomputedVideoInfoRef.current = precomputedVideoInfo;
+  }, [precomputedVideoInfo]);
 
   // 折叠状态（仅在 lg 及以上屏幕有效）
   const [isEpisodeSelectorCollapsed, setIsEpisodeSelectorCollapsed] =
@@ -915,6 +932,124 @@ function PlayPageClient() {
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // 全屏播放器内「切换播放源 / 选集」面板构建（免退出全屏操作）
+  // ---------------------------------------------------------------------------
+
+  // 每次渲染同步最新构建函数，供依赖最小化的 effect / 创建逻辑调用
+  const buildPlayerDynamicSettingsRef = useRef<() => any[]>(() => []);
+
+  const buildPlayerDynamicSettings = (): any[] => {
+    const sources = availableSourcesRef.current;
+    const settings: any[] = [];
+
+    // 切换播放源：当前源置顶，测速结果以小字辅助显示
+    if (sources.length > 0) {
+      const escapeHtml = (s: string) =>
+        String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      const sorted = [...sources].sort((a, b) => {
+        const aIsCurrent =
+          a.source?.toString() === currentSourceRef.current?.toString() &&
+          a.id?.toString() === currentIdRef.current?.toString();
+        const bIsCurrent =
+          b.source?.toString() === currentSourceRef.current?.toString() &&
+          b.id?.toString() === currentIdRef.current?.toString();
+        if (aIsCurrent && !bIsCurrent) return -1;
+        if (!aIsCurrent && bIsCurrent) return 1;
+        return 0;
+      });
+      settings.push({
+        name: 'player-source-selector',
+        html: '切换播放源',
+        icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 7h11m0 0-3-3m3 3-3 3M20 17H9m0 0 3-3m-3 3 3 3" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+        selector: sorted.map((s) => {
+          const info = precomputedVideoInfoRef.current.get(
+            `${s.source}-${s.id}`
+          );
+          const meta = info
+            ? `${info.quality} · ${info.loadSpeed} · ${info.pingTime}ms`
+            : '';
+          const metaHtml = meta
+            ? `<span style="font-size:11px;opacity:.6;margin-left:4px">${escapeHtml(
+                meta
+              )}</span>`
+            : '';
+          return {
+            html: `<span data-source="${escapeHtml(
+              s.source
+            )}" data-id="${escapeHtml(s.id)}" data-title="${escapeHtml(
+              s.title || ''
+            )}">${escapeHtml(
+              s.source_name || s.title || s.source
+            )}${metaHtml}</span>`,
+            default:
+              s.source?.toString() === currentSourceRef.current?.toString() &&
+              s.id?.toString() === currentIdRef.current?.toString(),
+          };
+        }),
+        onSelect: function (item: any, $dom?: HTMLElement) {
+          const ds = $dom?.dataset;
+          if (ds && ds.source && ds.id) {
+            handleSourceChange(ds.source, ds.id, ds.title || '');
+          }
+          return ds?.source || '';
+        },
+      });
+    }
+
+    // 选集：全量列出，当前集默认选中
+    const total = detailRef.current?.episodes?.length || 0;
+    if (total > 1) {
+      settings.push({
+        name: 'player-episode-selector',
+        html: '选集',
+        icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 6h16M4 12h16M4 18h10" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/></svg>',
+        selector: Array.from({ length: total }, (_, i) => ({
+          html: `<span data-episode="${i + 1}">第 ${i + 1} 集</span>`,
+          default: i === currentEpisodeIndexRef.current,
+        })),
+        onSelect: function (item: any, $dom?: HTMLElement) {
+          const ep = Number($dom?.dataset?.episode || 0);
+          if (ep > 0) {
+            if (artPlayerRef.current && !artPlayerRef.current.paused) {
+              saveCurrentPlayProgress();
+            }
+            setCurrentEpisodeIndex(ep - 1);
+          }
+          return `第 ${ep} 集`;
+        },
+      });
+    }
+
+    return settings;
+  };
+
+  buildPlayerDynamicSettingsRef.current = buildPlayerDynamicSettings;
+
+  // 换源搜索/测速完成后，同步更新全屏播放器内的 settings 列表
+  useEffect(() => {
+    const art = artPlayerRef.current;
+    if (!art) return;
+    try {
+      if (
+        typeof art.setting?.remove === 'function' &&
+        typeof art.setting?.add === 'function'
+      ) {
+        art.setting.remove('player-source-selector');
+        art.setting.remove('player-episode-selector');
+        buildPlayerDynamicSettingsRef
+          .current()
+          .forEach((opt: any) => art.setting.add(opt));
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [availableSources, precomputedVideoInfo, sourceSearchLoading]);
+
   useEffect(() => {
     document.addEventListener('keydown', handleKeyboardShortcuts);
     return () => {
@@ -1256,6 +1391,16 @@ function PlayPageClient() {
       artPlayerRef.current = null;
     }
 
+    // 移除触摸端双击默认全屏的拦截监听（监听在容器节点上，需随重建清理）
+    if (dblclickHandlerRef.current && artRef.current) {
+      artRef.current.removeEventListener(
+        'dblclick',
+        dblclickHandlerRef.current,
+        true
+      );
+      dblclickHandlerRef.current = null;
+    }
+
     try {
       // 创建新的播放器实例
       Artplayer.PLAYBACK_RATE = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
@@ -1354,6 +1499,7 @@ function PlayPageClient() {
             '<img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MCIgaGVpZ2h0PSI1MCIgdmlld0JveD0iMCAwIDUwIDUwIj48cGF0aCBkPSJNMjUuMjUxIDYuNDYxYy0xMC4zMTggMC0xOC42ODMgOC4zNjUtMTguNjgzIDE4LjY4M2g0LjA2OGMwLTguMDcgNi41NDUtMTQuNjE1IDE0LjYxNS0xNC42MTVWNi40NjF6IiBmaWxsPSIjMDA5Njg4Ij48YW5pbWF0ZVRyYW5zZm9ybSBhdHRyaWJ1dGVOYW1lPSJ0cmFuc2Zvcm0iIGF0dHJpYnV0ZVR5cGU9IlhNTCIgZHVyPSIxcyIgZnJvbT0iMCAyNSAyNSIgcmVwZWF0Q291bnQ9ImluZGVmaW5pdGUiIHRvPSIzNjAgMjUgMjUiIHR5cGU9InJvdGF0ZSIvPjwvcGF0aD48L3N2Zz4=">',
         },
         settings: [
+          ...buildPlayerDynamicSettingsRef.current(),
           {
             html: '去广告',
             icon: '<text x="50%" y="50%" font-size="20" font-weight="bold" text-anchor="middle" dominant-baseline="middle" fill="#ffffff">AD</text>',
@@ -1462,6 +1608,81 @@ function PlayPageClient() {
           },
         ],
       });
+
+      // 移动端自动播放兜底：部分浏览器（iOS Safari/移动 Chrome）拒绝带声自动播放，
+      // 捕获失败后改为静音自动播放，并提示用户手动开启声音
+      try {
+        const playPromise = artPlayerRef.current.video?.play?.() as
+          | Promise<void>
+          | undefined;
+        if (playPromise && typeof playPromise.catch === 'function') {
+          playPromise.catch(() => {
+            try {
+              const art = artPlayerRef.current;
+              if (!art || !art.video) return;
+              art.muted = true;
+              const retry = art.video.play?.();
+              if (retry && typeof retry.catch === 'function') {
+                retry.catch(() => {
+                  /* 静音重试仍被拒绝时保留默认播放按钮，等待用户手动点击 */
+                });
+              }
+              art.notice.show = '已静音播放，点击喇叭图标开启声音';
+            } catch {
+              /* ignore */
+            }
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+
+      // 触摸端双击快进/快退 10 秒（同时拦截默认的双击全屏行为）
+      try {
+        if (window.matchMedia('(pointer: coarse)').matches && artRef.current) {
+          const container = artRef.current;
+          const dblclickHandler = (e: Event) => {
+            e.preventDefault();
+            e.stopPropagation();
+          };
+          container.addEventListener('dblclick', dblclickHandler, true);
+          dblclickHandlerRef.current = dblclickHandler;
+
+          artPlayerRef.current.on('click', (event?: MouseEvent) => {
+            if (!event) return;
+            // 忽略控制栏/面板等区域的点击
+            const tapTarget = event.target as HTMLElement | null;
+            if (
+              !tapTarget ||
+              tapTarget.closest(
+                '.art-bottom, .art-controls, .art-control, .art-progress, .art-setting, .art-settings, .art-notice, .art-info, .art-contextmenu, .art-layers, .art-loading'
+              )
+            ) {
+              return;
+            }
+            const rect = container.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const now = Date.now();
+            const last = lastTapRef.current;
+            if (now - last.time < 300 && Math.abs(x - last.x) < 60) {
+              lastTapRef.current = { time: 0, x: 0 };
+              const art = artPlayerRef.current;
+              if (!art || !art.duration) return;
+              const forward = x > rect.width / 2;
+              const nextTime = Math.min(
+                Math.max(0, art.currentTime + (forward ? 10 : -10)),
+                art.duration
+              );
+              art.currentTime = nextTime;
+              art.notice.show = forward ? '快进 10 秒' : '快退 10 秒';
+            } else {
+              lastTapRef.current = { time: now, x };
+            }
+          });
+        }
+      } catch {
+        /* ignore */
+      }
 
       // 监听播放器事件
       artPlayerRef.current.on('ready', () => {
@@ -1830,7 +2051,7 @@ function PlayPageClient() {
                 isEpisodeSelectorCollapsed ? 'col-span-1' : 'md:col-span-3'
               }`}
             >
-              <div className='relative w-full h-[300px] lg:h-full'>
+              <div className='relative w-full aspect-video lg:aspect-auto lg:h-full'>
                 <div
                   ref={artRef}
                   className='bg-black w-full h-full rounded-xl overflow-hidden shadow-lg'
