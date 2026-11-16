@@ -40,6 +40,8 @@ interface EpisodeSelectorProps {
   sourceSearchError?: string | null;
   /** 预计算的测速结果，避免重复测速 */
   precomputedVideoInfo?: Map<string, VideoInfo>;
+  /** 单个源测速完成后的回调（供全屏播放器播放源面板同步展示测速信息） */
+  onVideoInfoUpdate?: (sourceKey: string, info: VideoInfo) => void;
 }
 
 /**
@@ -58,6 +60,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
   sourceSearchLoading = false,
   sourceSearchError = null,
   precomputedVideoInfo,
+  onVideoInfoUpdate,
 }) => {
   const router = useRouter();
   const pageCount = Math.ceil(totalEpisodes / episodesPerPage);
@@ -82,6 +85,12 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
   useEffect(() => {
     videoInfoMapRef.current = videoInfoMap;
   }, [videoInfoMap]);
+
+  // 回调经 ref 引用，避免 getVideoInfo 闭包捕获陈旧的 props
+  const onVideoInfoUpdateRef = useRef(onVideoInfoUpdate);
+  useEffect(() => {
+    onVideoInfoUpdateRef.current = onVideoInfoUpdate;
+  }, [onVideoInfoUpdate]);
 
   // 主要的 tab 状态：'episodes' 或 'sources'
   // 当只有一集时默认展示 "换源"，并隐藏 "选集" 标签
@@ -126,6 +135,8 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     try {
       const info = await getVideoResolutionFromM3u8(episodeUrl);
       setVideoInfoMap((prev) => new Map(prev).set(sourceKey, info));
+      // 同步给父组件，供全屏播放器播放源面板展示测速信息
+      onVideoInfoUpdateRef.current?.(sourceKey, info);
     } catch (error) {
       // 失败时保存错误状态
       setVideoInfoMap((prev) =>

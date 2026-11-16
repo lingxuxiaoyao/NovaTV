@@ -197,6 +197,18 @@ function PlayPageClient() {
     precomputedVideoInfoRef.current = precomputedVideoInfo;
   }, [precomputedVideoInfo]);
 
+  // EpisodeSelector 单源测速完成后同步结果，供全屏播放器播放源面板展示
+  // （直接带 source+id 进入页面或换源搜索后，全屏面板也能拿到测速信息）
+  const handleVideoInfoUpdate = useCallback(
+    (
+      key: string,
+      info: { quality: string; loadSpeed: string; pingTime: number }
+    ) => {
+      setPrecomputedVideoInfo((prev) => new Map(prev).set(key, info));
+    },
+    []
+  );
+
   // 折叠状态（仅在 lg 及以上屏幕有效）
   const [isEpisodeSelectorCollapsed, setIsEpisodeSelectorCollapsed] =
     useState(false);
@@ -305,7 +317,9 @@ function PlayPageClient() {
       }
     >();
     allResults.forEach((result, index) => {
-      const source = sources[index];
+      // 注意：allResults 与 pool 一一对应（pool 是按延迟排序后的源子集），
+      // 不能用 sources[index]，否则 key 错位导致测速数据查不到
+      const source = pool[index];
       const sourceKey = `${source.source}-${source.id}`;
 
       if (result) {
@@ -970,22 +984,18 @@ function PlayPageClient() {
           const info = precomputedVideoInfoRef.current.get(
             `${s.source}-${s.id}`
           );
+          // 测速信息以括号形式跟在源名后面，无测速数据时仅显示源名
           const meta = info
-            ? `${info.quality} · ${info.loadSpeed} · ${info.pingTime}ms`
-            : '';
-          const metaHtml = meta
-            ? `<span style="font-size:11px;opacity:.6;margin-left:4px">${escapeHtml(
-                meta
-              )}</span>`
+            ? ` (${info.quality} · ${info.loadSpeed} · ${info.pingTime}ms)`
             : '';
           return {
             html: `<span data-source="${escapeHtml(
               s.source
             )}" data-id="${escapeHtml(s.id)}" data-title="${escapeHtml(
               s.title || ''
-            )}">${escapeHtml(
-              s.source_name || s.title || s.source
-            )}${metaHtml}</span>`,
+            )}">${escapeHtml(s.source_name || s.title || s.source)}${escapeHtml(
+              meta
+            )}</span>`,
             default:
               s.source?.toString() === currentSourceRef.current?.toString() &&
               s.id?.toString() === currentIdRef.current?.toString(),
@@ -2117,6 +2127,7 @@ function PlayPageClient() {
                 sourceSearchLoading={sourceSearchLoading}
                 sourceSearchError={sourceSearchError}
                 precomputedVideoInfo={precomputedVideoInfo}
+                onVideoInfoUpdate={handleVideoInfoUpdate}
               />
             </div>
           </div>
