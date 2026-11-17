@@ -1,8 +1,10 @@
 /* eslint-disable no-console */
 
-'use client';
+// 注意：本文件同时被服务端(api/admin/update)和客户端(login/UserMenu)引用，
+// 不能加 'use client'，否则服务端拿到的是 client reference 代理，
+// 调用 .slice() 等属性方法会抛 "Attempted to call ... from the server" 错误。
 
-const CURRENT_VERSION = '20261116214526';
+const CURRENT_VERSION = '20261117151613';
 
 // 版本检查结果枚举
 export enum UpdateStatus {

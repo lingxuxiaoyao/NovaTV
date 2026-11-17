@@ -15,7 +15,9 @@ import {
 } from '@/lib/systemUpdate';
 import { CURRENT_VERSION } from '@/lib/version';
 
-export const runtime = 'edge';
+// 必须使用 Node 运行时：systemUpdate.ts 通过 node 的 http/fs 访问 docker.sock，
+// 在 edge 运行时下 process.versions.node 不存在，docker 能力探测会恒为 false。
+export const runtime = 'nodejs';
 
 function isOwner(request: NextRequest): boolean {
   const authInfo = getAuthInfoFromCookie(request);

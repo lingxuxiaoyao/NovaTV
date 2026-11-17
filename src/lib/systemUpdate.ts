@@ -187,12 +187,16 @@ async function fetchGhcrTags(): Promise<string[]> {
     headers.Authorization =
       'Basic ' + Buffer.from(`x:${ghToken}`).toString('base64');
   }
-  const tokenRes = await fetch(tokenUrl, { headers });
+  const tokenRes = await fetch(tokenUrl, {
+    headers,
+    signal: AbortSignal.timeout(10000),
+  });
   if (!tokenRes.ok) throw new Error(`ghcr token 获取失败: ${tokenRes.status}`);
   const { token } = (await tokenRes.json()) as { token: string };
 
   const listRes = await fetch(`https://ghcr.io/v2/${GHCR_REPO}/tags/list`, {
     headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10000),
   });
   if (!listRes.ok) throw new Error(`ghcr tags 获取失败: ${listRes.status}`);
   const data = (await listRes.json()) as { tags?: string[] };
@@ -214,7 +218,10 @@ async function fetchCommits(): Promise<any[]> {
   if (process.env.GITHUB_TOKEN) {
     headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
   }
-  const res = await fetch(GITHUB_COMMITS_API, { headers });
+  const res = await fetch(GITHUB_COMMITS_API, {
+    headers,
+    signal: AbortSignal.timeout(10000),
+  });
   if (!res.ok) throw new Error(`GitHub commits 获取失败: ${res.status}`);
   const list = (await res.json()) as any[];
   commitsCache.data = list;
@@ -230,7 +237,10 @@ export async function fetchLatestVersion(): Promise<string | null> {
   ];
   for (const url of urls) {
     try {
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await fetch(url, {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(8000),
+      });
       if (!res.ok) continue;
       const v = (await res.text()).trim();
       if (/^\d{14}$/.test(v)) return v;
@@ -250,6 +260,10 @@ function matchCommitByVersion(
   commits: any[],
   version: string
 ): { sha: string; date: string } | null {
+  // 防御性校验:版本号必须是 14 位数字字符串。
+  // 若传入的是非字符串(例如模块被误标 'use client' 后服务端拿到的代理对象),
+  // 直接返回 null,避免调用 .slice() 抛错导致整个接口 500。
+  if (typeof version !== 'string' || !/^\d{14}$/.test(version)) return null;
   const s = version;
   const base = `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}T${s.slice(
     8,
