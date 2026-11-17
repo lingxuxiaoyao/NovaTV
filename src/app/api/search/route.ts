@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { ApiSite, getCacheTime, getConfig } from '@/lib/config';
 import { searchFromApi } from '@/lib/downstream';
+import { isTitleRelevantToQuery } from '@/lib/searchFilter';
 import { SearchResult } from '@/lib/types';
 import { yellowWords } from '@/lib/yellow';
 
@@ -65,6 +66,11 @@ export async function GET(request: Request) {
       .sort((a, b) => a.latencyMs - b.latencyMs);
 
     let flattenedResults = successfulResults.flatMap((res) => res.items);
+
+    // 过滤与关键词无关的条目：部分站点无命中时会返回整页热门内容
+    flattenedResults = flattenedResults.filter((result) =>
+      isTitleRelevantToQuery(result.title, query)
+    );
 
     if (!config.SiteConfig.DisableYellowFilter) {
       flattenedResults = flattenedResults.filter((result) => {

@@ -12,6 +12,7 @@ import {
   getSearchHistory,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { isTitleRelevantToQuery } from '@/lib/searchFilter';
 import { SearchResult } from '@/lib/types';
 import { yellowWords } from '@/lib/yellow';
 
@@ -166,7 +167,11 @@ function SearchPageClient() {
         `/api/search?q=${encodeURIComponent(query.trim())}`
       );
       const data = await response.json();
-      let results = data.results;
+      let results: SearchResult[] = data.results || [];
+      // 兜底过滤：浏览器可能还缓存着旧的接口响应（含无关条目），这里再筛一次
+      results = results.filter((result) =>
+        isTitleRelevantToQuery(result.title, query)
+      );
       if (
         typeof window !== 'undefined' &&
         !(window as any).RUNTIME_CONFIG?.DISABLE_YELLOW_FILTER
