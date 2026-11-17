@@ -4,7 +4,7 @@
 // 不能加 'use client'，否则服务端拿到的是 client reference 代理，
 // 调用 .slice() 等属性方法会抛 "Attempted to call ... from the server" 错误。
 
-const CURRENT_VERSION = '20261117151742';
+const CURRENT_VERSION = '20261117174418';
 
 // 版本检查结果枚举
 export enum UpdateStatus {
@@ -19,26 +19,75 @@ const VERSION_CHECK_URLS = [
   'https://raw.githubusercontent.com/lingxuxiaoyao/NovaTV/main/VERSION.txt',
 ];
 
+// 浏览器端版本检查结果缓存：UserMenu 挂在 PageLayout 上，
+// 每次页面跳转都会重新挂载并触发检查。不加缓存时每次跳转都要去
+// GitHub 拉 VERSION.txt，国内网络下会挂起 5~10s，管理页因此显得很卡。
+const UPDATE_CACHE_KEY = `novatv_update_check_${CURRENT_VERSION}`;
+const UPDATE_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 小时
+
+function readUpdateCache(): UpdateStatus | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    const raw = window.localStorage.getItem(UPDATE_CACHE_KEY);
+    if (!raw) return null;
+    const cached = JSON.parse(raw) as { at: number; status: UpdateStatus };
+    if (!cached || typeof cached.at !== 'number') return null;
+    if (Date.now() - cached.at > UPDATE_CACHE_TTL) return null;
+    if (
+      cached.status !== UpdateStatus.HAS_UPDATE &&
+      cached.status !== UpdateStatus.NO_UPDATE
+    ) {
+      return null;
+    }
+    return cached.status;
+  } catch {
+    return null;
+  }
+}
+
+function writeUpdateCache(status: UpdateStatus) {
+  try {
+    if (typeof window === 'undefined') return;
+    if (
+      status !== UpdateStatus.HAS_UPDATE &&
+      status !== UpdateStatus.NO_UPDATE
+    ) {
+      return;
+    }
+    window.localStorage.setItem(
+      UPDATE_CACHE_KEY,
+      JSON.stringify({ at: Date.now(), status })
+    );
+  } catch {
+    /* localStorage 不可用时忽略 */
+  }
+}
+
 /**
  * 检查是否有新版本可用
  * @returns Promise<UpdateStatus> - 返回版本检查状态
  */
 export async function checkForUpdates(): Promise<UpdateStatus> {
+  // 命中缓存直接返回，避免每次路由跳转都打外网
+  const cached = readUpdateCache();
+  if (cached) return cached;
+
   try {
-    // 尝试从主要URL获取版本信息
-    const primaryVersion = await fetchVersionFromUrl(VERSION_CHECK_URLS[0]);
-    if (primaryVersion) {
-      return compareVersions(primaryVersion);
-    }
+    // 两个地址并发：串行最坏要等 2×5s，并发最坏只有 5s。
+    // 任一地址拿到版本号即可结束；返回 null 的地址视为失败并继续等待另一个。
+    const remoteVersion = await Promise.any(
+      VERSION_CHECK_URLS.map(async (url) => {
+        const v = await fetchVersionFromUrl(url);
+        if (!v) throw new Error('empty version');
+        return v;
+      })
+    ).catch(() => null);
 
-    // 如果主要URL失败，尝试备用URL
-    const backupVersion = await fetchVersionFromUrl(VERSION_CHECK_URLS[1]);
-    if (backupVersion) {
-      return compareVersions(backupVersion);
-    }
+    if (!remoteVersion) return UpdateStatus.FETCH_FAILED;
 
-    // 如果两个URL都失败，返回获取失败状态
-    return UpdateStatus.FETCH_FAILED;
+    const status = compareVersions(remoteVersion);
+    writeUpdateCache(status);
+    return status;
   } catch (error) {
     console.error('版本检查失败:', error);
     return UpdateStatus.FETCH_FAILED;
