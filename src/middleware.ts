@@ -59,6 +59,17 @@ export async function middleware(request: NextRequest) {
   return handleAuthFailure(request, pathname);
 }
 
+// 会话校验结果缓存：一次首屏会并发十几个请求（页面 / 数据接口 / 海报图代理），
+// 每个请求原本都要做一次内部 HTTP 调用 + 存储读写，远程 Redis 下会明显拖慢首屏。
+// 这里做短 TTL 缓存 + 并发去重，同一设备同一会话在 TTL 内只真正校验一次。
+const SESSION_CACHE_TTL = 60 * 1000; // 60 秒
+const SESSION_CACHE_MAX = 2000;
+const sessionCache = new Map<string, { valid: boolean; expires: number }>();
+const sessionInflight = new Map<string, Promise<boolean>>();
+
+// 高频且与登录态无关的资源类接口，只做签名校验，跳过会话校验（省一次内部请求）
+const SESSION_SKIP_PREFIXES = ['/api/image-proxy'];
+
 // 校验登录会话有效性：通过内部接口查询存储中的会话列表
 // 设备上限按用户单独配置（device_limit，0 = 不限制），由校验接口读取配置后判定
 // （middleware 无法直接访问 Redis/D1，故经由 API 路由查询）
@@ -69,27 +80,61 @@ async function checkUserSession(
   const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
   if (storageType === 'localstorage') return true;
 
-  try {
-    const checkUrl = new URL('/api/session/check', request.url);
-    if (authInfo.username) {
-      checkUrl.searchParams.set('u', authInfo.username);
-    }
-    if (authInfo.timestamp) {
-      checkUrl.searchParams.set('t', String(authInfo.timestamp));
-    }
-    if (authInfo.device_id) {
-      checkUrl.searchParams.set('d', authInfo.device_id);
-    }
-
-    const res = await fetch(checkUrl, { method: 'GET' });
-    if (!res.ok) return true; // 校验服务异常时放行，避免误伤
-
-    const data = await res.json();
-    return data?.valid !== false;
-  } catch {
-    // 内部请求失败时放行，避免网络抖动导致全员掉线
+  if (
+    SESSION_SKIP_PREFIXES.some((prefix) =>
+      request.nextUrl.pathname.startsWith(prefix)
+    )
+  ) {
     return true;
   }
+
+  const cacheKey = `${authInfo.username || ''}|${authInfo.device_id || ''}|${
+    authInfo.timestamp || 0
+  }`;
+  const now = Date.now();
+  const cached = sessionCache.get(cacheKey);
+  if (cached && cached.expires > now) return cached.valid;
+
+  const inflight = sessionInflight.get(cacheKey);
+  if (inflight) return inflight;
+
+  const task = (async () => {
+    try {
+      const checkUrl = new URL('/api/session/check', request.url);
+      if (authInfo.username) {
+        checkUrl.searchParams.set('u', authInfo.username);
+      }
+      if (authInfo.timestamp) {
+        checkUrl.searchParams.set('t', String(authInfo.timestamp));
+      }
+      if (authInfo.device_id) {
+        checkUrl.searchParams.set('d', authInfo.device_id);
+      }
+
+      const res = await fetch(checkUrl, { method: 'GET' });
+      if (!res.ok) return true; // 校验服务异常时放行，避免误伤
+
+      const data = await res.json();
+      return data?.valid !== false;
+    } catch {
+      // 内部请求失败时放行，避免网络抖动导致全员掉线
+      return true;
+    }
+  })()
+    .then((valid) => {
+      if (sessionCache.size >= SESSION_CACHE_MAX) sessionCache.clear();
+      sessionCache.set(cacheKey, {
+        valid,
+        expires: Date.now() + SESSION_CACHE_TTL,
+      });
+      return valid;
+    })
+    .finally(() => {
+      sessionInflight.delete(cacheKey);
+    });
+
+  sessionInflight.set(cacheKey, task);
+  return task;
 }
 
 // 验证签名

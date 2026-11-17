@@ -4,7 +4,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getUserDeviceLimit } from '@/lib/config';
 import { getStorage } from '@/lib/db';
 
-export const runtime = 'edge';
+// 需要读取管理配置（Docker 部署下配置来自 config.json，用到 node 的 fs），
+// edge 运行时下 getConfig 会抛错，导致设备上限恒被当成「不限制」。
+export const runtime = 'nodejs';
 
 // 登录设备会话校验（供 middleware 内部调用）
 // 设备上限按用户在管理后台的单独配置（device_limit，0 = 不限制）

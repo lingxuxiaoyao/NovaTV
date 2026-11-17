@@ -56,6 +56,26 @@ async function fetchDoubanData(
 
 export const runtime = 'edge';
 
+// 服务端短期缓存：首页热门列表是每次进站都会请求的热点，缓存后同一批数据只有第一个请求
+// 真正回源豆瓣，后续请求直接命中内存；豆瓣偶发超时/限流时也能秒开（并可用过期数据兜底）。
+const MEMORY_CACHE_TTL = 10 * 60 * 1000;
+const MEMORY_CACHE_MAX = 200;
+const memoryCache = new Map<string, { data: DoubanResult; expires: number }>();
+
+// 首页列表的缓存时长来自管理配置，读取失败时退回默认值，避免整个接口 500
+let cacheTimeMemo = { value: 7200, expires: 0 };
+async function getSafeCacheTime(): Promise<number> {
+  const now = Date.now();
+  if (cacheTimeMemo.expires > now) return cacheTimeMemo.value;
+  try {
+    const value = await getCacheTime();
+    cacheTimeMemo = { value, expires: now + 5 * 60 * 1000 };
+    return value;
+  } catch {
+    return 7200;
+  }
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
 
@@ -97,6 +117,19 @@ export async function GET(request: Request) {
 
   const target = `https://m.douban.com/rexxar/api/v2/subject/recent_hot/${kind}?start=${pageStart}&limit=${pageLimit}&category=${category}&type=${type}`;
 
+  const cacheTime = await getSafeCacheTime();
+  const cacheHeaders = {
+    'Cache-Control': `public, max-age=${cacheTime}, s-maxage=${cacheTime}`,
+    'CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
+    'Vercel-CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
+  };
+
+  const now = Date.now();
+  const hit = memoryCache.get(target);
+  if (hit && hit.expires > now) {
+    return NextResponse.json(hit.data, { headers: cacheHeaders });
+  }
+
   try {
     // 调用豆瓣 API
     const doubanData = await fetchDoubanData(target);
@@ -116,15 +149,18 @@ export async function GET(request: Request) {
       list: list,
     };
 
-    const cacheTime = await getCacheTime();
-    return NextResponse.json(response, {
-      headers: {
-        'Cache-Control': `public, max-age=${cacheTime}, s-maxage=${cacheTime}`,
-        'CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
-        'Vercel-CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
-      },
+    if (memoryCache.size >= MEMORY_CACHE_MAX) memoryCache.clear();
+    memoryCache.set(target, {
+      data: response,
+      expires: now + MEMORY_CACHE_TTL,
     });
+
+    return NextResponse.json(response, { headers: cacheHeaders });
   } catch (error) {
+    // 回源失败但有旧数据时先用旧数据顶上，避免首页直接空白
+    if (hit) {
+      return NextResponse.json(hit.data, { headers: cacheHeaders });
+    }
     return NextResponse.json(
       { error: '获取豆瓣数据失败', details: (error as Error).message },
       { status: 500 }
