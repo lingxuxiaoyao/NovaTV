@@ -235,20 +235,28 @@ export async function fetchLatestVersion(): Promise<string | null> {
     'https://ghfast.top/raw.githubusercontent.com/lingxuxiaoyao/NovaTV/main/VERSION.txt',
     'https://raw.githubusercontent.com/lingxuxiaoyao/NovaTV/main/VERSION.txt',
   ];
-  for (const url of urls) {
+  // 两个地址并发请求:串行最坏要等 2×8s,出网受限时面板会长时间转圈。
+  // 谁先返回合法版本号就用谁,另一个自动丢弃。
+  const tasks = urls.map(async (url) => {
     try {
       const res = await fetch(url, {
         cache: 'no-store',
         signal: AbortSignal.timeout(8000),
       });
-      if (!res.ok) continue;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const v = (await res.text()).trim();
-      if (/^\d{14}$/.test(v)) return v;
+      if (!/^\d{14}$/.test(v)) throw new Error('版本号格式不合法');
+      return v;
     } catch (e) {
       console.log('获取远程版本失败:', url, (e as Error).message);
+      throw e;
     }
+  });
+  try {
+    return await Promise.any(tasks);
+  } catch {
+    return null;
   }
-  return null;
 }
 
 /**
@@ -296,10 +304,21 @@ function matchCommitByVersion(
 export async function getVersionList(
   currentVersion: string
 ): Promise<VersionEntry[]> {
-  const [tags, commitList] = await Promise.all([
+  // 镜像标签与提交列表任一拉取失败都不应让整个接口 500:
+  // 服务器出网受限时至少还能把已知的版本 tag 列表展示出来。
+  const [tagsRes, commitsRes] = await Promise.allSettled([
     fetchGhcrTags(),
     fetchCommits(),
   ]);
+  if (tagsRes.status === 'rejected') {
+    console.log('获取镜像标签失败:', (tagsRes.reason as Error)?.message);
+  }
+  if (commitsRes.status === 'rejected') {
+    console.log('获取提交列表失败:', (commitsRes.reason as Error)?.message);
+  }
+  const tags = tagsRes.status === 'fulfilled' ? tagsRes.value : [];
+  const commitList = commitsRes.status === 'fulfilled' ? commitsRes.value : [];
+  if (tags.length === 0 || commitList.length === 0) return [];
   const tagSet = new Set(tags);
   const tagPrefix = 'sha-';
 
@@ -325,23 +344,31 @@ export async function getVersionList(
     if (tagSet.has(`${tagPrefix}${short}`)) {
       currentSha = matched.sha;
     } else {
-      // 当前 commit 无独立 tag(批量推送的中段提交),归属其所在 push 的 head
+      // 当前 commit 无独立 tag(批量推送的中段提交),归属其所在 push 的 head:
+      // nodes 与 commits 都是「最新在前」,比它新的节点 index 更小,
+      // 取其中 index 最大(离它最近)的那个才是这次 push 的 head。
+      // 之前用 nodes.find 会直接命中全局最新的节点,归属错误。
       const idx = commits.findIndex((c) => c.sha === matched.sha);
-      const host = nodes.find(
-        (n) =>
-          commits.findIndex((c) => c.sha === n.sha) < idx && // 在它之前(更新)的位置
-          commits.findIndex((c) => c.sha === n.sha) >= 0
-      );
+      let host: (typeof nodes)[number] | null = null;
+      for (const n of nodes) {
+        const nIdx = commits.findIndex((c) => c.sha === n.sha);
+        if (nIdx >= 0 && nIdx < idx) host = n;
+      }
       currentSha = host ? host.sha : null;
     }
   }
 
   // 聚合每个版本节点相对上一节点的提交
+  // 注意:GitHub commits API 返回顺序是「最新在前」,nodes 也按此顺序。
+  // 因此 nodes[i] 的 idx 一定小于 nodes[i+1] 的 prevIdx,
+  // 该版本包含的提交区间是 [idx, prevIdx)(含自身,不含上一个版本)。
+  // 之前写成 slice(prevIdx + 1, idx + 1) 上下界颠倒,导致绝大多数版本显示 0 项更新。
   return nodes.map((node, i) => {
     const idx = commits.findIndex((c) => c.sha === node.sha);
     const prev = nodes[i + 1];
     const prevIdx = prev ? commits.findIndex((c) => c.sha === prev.sha) : -1;
-    const group = commits.slice(prevIdx + 1, idx + 1);
+    // 最旧的节点没有上一版本可比,取它自身及更早的全部提交
+    const group = prev ? commits.slice(idx, prevIdx) : commits.slice(idx);
     return {
       sha: node.sha,
       short: node.short,
