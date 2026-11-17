@@ -10,7 +10,11 @@ import React, {
 } from 'react';
 
 import { SearchResult } from '@/lib/types';
-import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
+import {
+  getVideoResolutionFromM3u8,
+  parseSpeedToKBs,
+  processImageUrl,
+} from '@/lib/utils';
 
 // 定义视频信息类型
 interface VideoInfo {
@@ -99,7 +103,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
   );
 
   // 当前分页索引（0 开始）
-  const initialPage = Math.floor((value - 1) / episodesPerPage);
+  const initialPage = Math.floor(((value ?? 1) - 1) / episodesPerPage);
   const [currentPage, setCurrentPage] = useState<number>(initialPage);
 
   // 是否倒序显示
@@ -214,7 +218,14 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
 
       if (pendingSources.length === 0) return;
 
-      const batchSize = Math.ceil(pendingSources.length / 2);
+      // 移动端浏览器对并发媒体解码限制严格，批内并发过高会导致全部超时
+      // （表现为手机端测速一直"测不出来"），每批数量压缩到 4 个
+      const isMobileDevice =
+        typeof navigator !== 'undefined' &&
+        /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      const batchSize = isMobileDevice
+        ? Math.min(4, pendingSources.length)
+        : Math.ceil(pendingSources.length / 2);
 
       for (let start = 0; start < pendingSources.length; start += batchSize) {
         const batch = pendingSources.slice(start, start + batchSize);
@@ -248,6 +259,42 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
 
   const categoryContainerRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  // 集数变化（手动切集/自动连播/换源恢复）时，分页跟随当前集所在页
+  useEffect(() => {
+    if (!value || value <= 0) return;
+    const page = Math.floor((value - 1) / episodesPerPage);
+    setCurrentPage((prev) => (prev === page ? prev : page));
+  }, [value, episodesPerPage]);
+
+  // 集数网格与当前集按钮的引用（用于打开面板时自动滚动定位）
+  const episodeGridRef = useRef<HTMLDivElement | null>(null);
+  const activeEpisodeButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  // 打开选集面板/翻页/切集时，将当前播放集数的按钮滚动到网格视口中间
+  useEffect(() => {
+    if (activeTab !== 'episodes') return;
+    const container = episodeGridRef.current;
+    const btn = activeEpisodeButtonRef.current;
+    if (!container || !btn) return;
+    const containerRect = container.getBoundingClientRect();
+    const btnRect = btn.getBoundingClientRect();
+    // 当前集已在可视范围内时不滚动，避免干扰用户手动浏览
+    if (
+      btnRect.top >= containerRect.top &&
+      btnRect.bottom <= containerRect.bottom
+    ) {
+      return;
+    }
+    const targetScrollTop =
+      container.scrollTop +
+      (btnRect.top - containerRect.top) -
+      (containerRect.height - btnRect.height) / 2;
+    container.scrollTo({
+      top: Math.max(0, targetScrollTop),
+      behavior: 'smooth',
+    });
+  }, [activeTab, displayPage, value]);
 
   // 当分页切换时，将激活的分页标签滚动到视口中间
   useEffect(() => {
@@ -402,7 +449,10 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
           </div>
 
           {/* 集数网格 */}
-          <div className='grid grid-cols-[repeat(auto-fill,minmax(44px,1fr))] auto-rows-[44px] gap-x-3 gap-y-3 overflow-y-auto h-full pb-4'>
+          <div
+            ref={episodeGridRef}
+            className='grid grid-cols-[repeat(auto-fill,minmax(44px,1fr))] auto-rows-[44px] gap-x-3 gap-y-3 overflow-y-auto h-full pb-4'
+          >
             {(() => {
               const len = currentEnd - currentStart + 1;
               const episodes = Array.from({ length: len }, (_, i) =>
@@ -414,6 +464,9 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
               return (
                 <button
                   key={episodeNumber}
+                  ref={(el) => {
+                    if (isActive) activeEpisodeButtonRef.current = el;
+                  }}
                   onClick={() => handleEpisodeClick(episodeNumber - 1)}
                   className={`h-full flex items-center justify-center text-sm font-medium rounded-md transition-all duration-200 
                     ${
@@ -470,7 +523,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
             !sourceSearchError &&
             availableSources.length > 0 && (
               <div className='flex-1 overflow-y-auto space-y-2 pb-20'>
-                {availableSources
+                {[...availableSources]
                   .sort((a, b) => {
                     const aIsCurrent =
                       a.source?.toString() === currentSource?.toString() &&
@@ -480,6 +533,14 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                       b.id?.toString() === currentId?.toString();
                     if (aIsCurrent && !bIsCurrent) return -1;
                     if (!aIsCurrent && bIsCurrent) return 1;
+                    // 测速完成后按下载速度从快到慢排序，无测速数据的排在后面
+                    const aSpeed = parseSpeedToKBs(
+                      videoInfoMap.get(`${a.source}-${a.id}`)?.loadSpeed
+                    );
+                    const bSpeed = parseSpeedToKBs(
+                      videoInfoMap.get(`${b.source}-${b.id}`)?.loadSpeed
+                    );
+                    if (aSpeed !== bSpeed) return bSpeed - aSpeed;
                     return 0;
                   })
                   .map((source, index) => {

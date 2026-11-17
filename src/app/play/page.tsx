@@ -23,7 +23,11 @@ import {
 } from '@/lib/db.client';
 import { probeM3u8Latency } from '@/lib/sourceSpeedTest';
 import { SearchResult } from '@/lib/types';
-import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
+import {
+  getVideoResolutionFromM3u8,
+  parseSpeedToKBs,
+  processImageUrl,
+} from '@/lib/utils';
 import useSafePlayHistory from '@/hooks/useSafePlayHistory';
 
 import CommentSection from '@/components/CommentSection';
@@ -155,6 +159,8 @@ function PlayPageClient() {
   // 触摸端双击快进/快退状态
   const lastTapRef = useRef<{ time: number; x: number }>({ time: 0, x: 0 });
   const dblclickHandlerRef = useRef<((e: Event) => void) | null>(null);
+  // 设置面板点击监听（打开换源/选集子面板时滚动到当前项）
+  const settingsScrollHandlerRef = useRef<((e: Event) => void) | null>(null);
 
   // 换源相关状态
   const [availableSources, setAvailableSources] = useState<SearchResult[]>([]);
@@ -269,8 +275,15 @@ function PlayPageClient() {
 
     setLoadingMessage('⚡ 正在优选最佳播放源...');
 
-    // 将播放源均分为两批，并发测速各批，避免一次性过多请求
-    const batchSize = Math.ceil(pool.length / 2);
+    // 将播放源分批并发测速，避免一次性过多请求。
+    // 移动端浏览器对并发媒体解码限制严格，批内并发过高会导致全部超时
+    // （表现为手机端测速一直"测不出来"），每批数量压缩到 4 个
+    const isMobileDevice =
+      typeof navigator !== 'undefined' &&
+      /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const batchSize = isMobileDevice
+      ? Math.min(4, pool.length)
+      : Math.ceil(pool.length / 2);
     const allResults: Array<{
       source: SearchResult;
       testResult: { quality: string; loadSpeed: string; pingTime: number };
@@ -899,7 +912,9 @@ function PlayPageClient() {
         }
       }
 
-      const newDetail = availableSources.find(
+      // 从 ref 读取换源列表与当前集数：全屏播放器 settings 面板的
+      // onSelect 闭包可能来自较早的渲染，读 state 会拿到陈旧数据导致换源失败
+      const newDetail = availableSourcesRef.current.find(
         (source) => source.source === newSource && source.id === newId
       );
       if (!newDetail) {
@@ -908,7 +923,7 @@ function PlayPageClient() {
       }
 
       // 尝试跳转到当前正在播放的集数
-      let targetIndex = currentEpisodeIndex;
+      let targetIndex = currentEpisodeIndexRef.current;
 
       // 如果当前集数超出新源的范围，则跳转到第一集
       if (!newDetail.episodes || targetIndex >= newDetail.episodes.length) {
@@ -916,7 +931,7 @@ function PlayPageClient() {
       }
 
       // 如果仍然是同一集数且播放进度有效，则在播放器就绪后恢复到原始进度
-      if (targetIndex !== currentEpisodeIndex) {
+      if (targetIndex !== currentEpisodeIndexRef.current) {
         resumeTimeRef.current = 0;
       } else if (
         (!resumeTimeRef.current || resumeTimeRef.current === 0) &&
@@ -953,11 +968,31 @@ function PlayPageClient() {
   // 每次渲染同步最新构建函数，供依赖最小化的 effect / 创建逻辑调用
   const buildPlayerDynamicSettingsRef = useRef<() => any[]>(() => []);
 
+  // 将设置面板滚动到当前选中项（换源/选集子面板打开时，定位到当前播放源/集数）
+  const scrollSettingPanelToCurrent = () => {
+    const settingsEl = artRef.current?.querySelector(
+      '.art-settings'
+    ) as HTMLElement | null;
+    if (!settingsEl) return;
+    const item = settingsEl.querySelector(
+      '.art-setting-panel.art-current .art-setting-item.art-current'
+    ) as HTMLElement | null;
+    if (!item) return;
+    const containerRect = settingsEl.getBoundingClientRect();
+    const itemRect = item.getBoundingClientRect();
+    const targetTop =
+      settingsEl.scrollTop +
+      (itemRect.top - containerRect.top) -
+      (containerRect.height - itemRect.height) / 2;
+    settingsEl.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+  };
+
   const buildPlayerDynamicSettings = (): any[] => {
     const sources = availableSourcesRef.current;
     const settings: any[] = [];
 
-    // 切换播放源：当前源置顶，测速结果以小字辅助显示
+    // 切换播放源：当前源置顶，其余按测速下载速度从快到慢排序，
+    // 测速结果以小字辅助显示（缺失项自动省略）
     if (sources.length > 0) {
       const escapeHtml = (s: string) =>
         String(s)
@@ -974,39 +1009,83 @@ function PlayPageClient() {
           b.id?.toString() === currentIdRef.current?.toString();
         if (aIsCurrent && !bIsCurrent) return -1;
         if (!aIsCurrent && bIsCurrent) return 1;
+        const aSpeed = parseSpeedToKBs(
+          precomputedVideoInfoRef.current.get(`${a.source}-${a.id}`)?.loadSpeed
+        );
+        const bSpeed = parseSpeedToKBs(
+          precomputedVideoInfoRef.current.get(`${b.source}-${b.id}`)?.loadSpeed
+        );
+        if (aSpeed !== bSpeed) return bSpeed - aSpeed;
         return 0;
       });
       settings.push({
         name: 'player-source-selector',
         html: '切换播放源',
+        width: 260,
         icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 7h11m0 0-3-3m3 3-3 3M20 17H9m0 0 3-3m-3 3 3 3" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
         selector: sorted.map((s) => {
           const info = precomputedVideoInfoRef.current.get(
             `${s.source}-${s.id}`
           );
-          // 测速信息以括号形式跟在源名后面，无测速数据时仅显示源名
-          const meta = info
-            ? ` (${info.quality} · ${info.loadSpeed} · ${info.pingTime}ms)`
-            : '';
+          // 测速信息以小字括号形式跟在源名后面，缺失的项自动省略，
+          // 避免长串文字挤出面板显示不全
+          const metaParts: string[] = [];
+          if (
+            info?.quality &&
+            info.quality !== '未知' &&
+            info.quality !== '错误'
+          ) {
+            metaParts.push(info.quality);
+          }
+          if (
+            info?.loadSpeed &&
+            info.loadSpeed !== '未知' &&
+            info.loadSpeed !== '测量中...'
+          ) {
+            metaParts.push(info.loadSpeed);
+          }
+          if (info && info.pingTime > 0) {
+            metaParts.push(`${info.pingTime}ms`);
+          }
+          const meta =
+            metaParts.length > 0
+              ? ` <span style="font-size:11px;opacity:.75">(${escapeHtml(
+                  metaParts.join(' · ')
+                )})</span>`
+              : '';
           return {
             html: `<span data-source="${escapeHtml(
               s.source
             )}" data-id="${escapeHtml(s.id)}" data-title="${escapeHtml(
               s.title || ''
-            )}">${escapeHtml(s.source_name || s.title || s.source)}${escapeHtml(
-              meta
-            )}</span>`,
+            )}">${escapeHtml(
+              s.source_name || s.title || s.source
+            )}${meta}</span>`,
             default:
               s.source?.toString() === currentSourceRef.current?.toString() &&
               s.id?.toString() === currentIdRef.current?.toString(),
+            // 自定义数据直接挂在 selector item 上，onSelect 通过 item 参数读取。
+            // 此前只挂在内层 span 的 data-* 上，而 ArtPlayer 传入的 $dom 是
+            // 外层条目元素，dataset 读不到，导致面板里换源点击无效
+            source: s.source,
+            id: s.id,
+            title: s.title || '',
+            name: s.source_name || s.title || s.source,
           };
         }),
         onSelect: function (item: any, $dom?: HTMLElement) {
-          const ds = $dom?.dataset;
-          if (ds && ds.source && ds.id) {
-            handleSourceChange(ds.source, ds.id, ds.title || '');
+          // 优先读取 item 携带的自定义数据，DOM 查找仅作兜底
+          const fallback = $dom?.querySelector(
+            '[data-source]'
+          ) as HTMLElement | null;
+          const source = item?.source ?? fallback?.dataset?.source;
+          const id = item?.id ?? fallback?.dataset?.id;
+          const title = item?.title ?? fallback?.dataset?.title ?? '';
+          if (source && id) {
+            handleSourceChange(String(source), String(id), String(title));
           }
-          return ds?.source || '';
+          // 返回值作为父级条目的 tooltip 提示
+          return String(item?.name || '');
         },
       });
     }
@@ -1017,20 +1096,31 @@ function PlayPageClient() {
       settings.push({
         name: 'player-episode-selector',
         html: '选集',
+        width: 220,
         icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 6h16M4 12h16M4 18h10" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/></svg>',
         selector: Array.from({ length: total }, (_, i) => ({
           html: `<span data-episode="${i + 1}">第 ${i + 1} 集</span>`,
           default: i === currentEpisodeIndexRef.current,
+          // 同上：数据挂在 item 上，供 onSelect 读取
+          episode: i + 1,
         })),
         onSelect: function (item: any, $dom?: HTMLElement) {
-          const ep = Number($dom?.dataset?.episode || 0);
+          const ep = Number(
+            item?.episode ??
+              $dom?.dataset?.episode ??
+              $dom
+                ?.querySelector('[data-episode]')
+                ?.getAttribute('data-episode') ??
+              0
+          );
           if (ep > 0) {
             if (artPlayerRef.current && !artPlayerRef.current.paused) {
               saveCurrentPlayProgress();
             }
             setCurrentEpisodeIndex(ep - 1);
           }
-          return `第 ${ep} 集`;
+          // 返回值作为父级条目的 tooltip 提示
+          return ep > 0 ? `第 ${ep} 集` : '';
         },
       });
     }
@@ -1102,6 +1192,74 @@ function PlayPageClient() {
       setCurrentEpisodeIndex(idx + 1);
     }
   };
+
+  // ---------------------------------------------------------------------------
+  // MediaSession 兼容：让系统/浏览器原生播放器（通知栏、画中画、
+  // 夸克等自带播放器界面）显示上一集/下一集按钮并能切换集数
+  // ---------------------------------------------------------------------------
+  const handleNextEpisodeRef = useRef<() => void>(() => undefined);
+  handleNextEpisodeRef.current = handleNextEpisode;
+  const handlePreviousEpisodeRef = useRef<() => void>(() => undefined);
+  handlePreviousEpisodeRef.current = handlePreviousEpisode;
+
+  // 注册上一集/下一集按钮的点击处理（仅注册一次，内部经 ref 调用最新函数）
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
+      return;
+    }
+    const mediaSession = navigator.mediaSession;
+    try {
+      mediaSession.setActionHandler('nexttrack', () =>
+        handleNextEpisodeRef.current()
+      );
+      mediaSession.setActionHandler('previoustrack', () =>
+        handlePreviousEpisodeRef.current()
+      );
+    } catch {
+      /* 浏览器不支持对应 action 时忽略 */
+    }
+    return () => {
+      try {
+        mediaSession.setActionHandler('nexttrack', null);
+        mediaSession.setActionHandler('previoustrack', null);
+      } catch {
+        /* ignore */
+      }
+    };
+  }, []);
+
+  // 更新 MediaSession 元数据：原生播放器界面/通知栏显示当前剧名与集数
+  useEffect(() => {
+    if (
+      typeof navigator === 'undefined' ||
+      !('mediaSession' in navigator) ||
+      !('MediaMetadata' in window)
+    ) {
+      return;
+    }
+    if (!videoTitle) return;
+    try {
+      navigator.mediaSession.metadata = new window.MediaMetadata({
+        title:
+          totalEpisodes > 1
+            ? `${videoTitle} 第${currentEpisodeIndex + 1}集`
+            : videoTitle,
+        artist: detail?.source_name || 'NovaTV',
+        album: 'NovaTV',
+        artwork: videoCover
+          ? [{ src: processImageUrl(videoCover), sizes: '512x512' }]
+          : [],
+      });
+    } catch {
+      /* ignore */
+    }
+  }, [
+    videoTitle,
+    currentEpisodeIndex,
+    totalEpisodes,
+    detail?.source_name,
+    videoCover,
+  ]);
 
   // ---------------------------------------------------------------------------
   // 键盘快捷键
@@ -1410,6 +1568,15 @@ function PlayPageClient() {
       );
       dblclickHandlerRef.current = null;
     }
+    // 同理移除设置面板滚动定位监听
+    if (settingsScrollHandlerRef.current && artRef.current) {
+      artRef.current.removeEventListener(
+        'click',
+        settingsScrollHandlerRef.current,
+        true
+      );
+      settingsScrollHandlerRef.current = null;
+    }
 
     try {
       // 创建新的播放器实例
@@ -1619,8 +1786,28 @@ function PlayPageClient() {
         ],
       });
 
-      // 移动端自动播放兜底：部分浏览器（iOS Safari/移动 Chrome）拒绝带声自动播放，
-      // 捕获失败后改为静音自动播放，并提示用户手动开启声音
+      // 设置面板点击监听：打开「切换播放源/选集」子面板时，
+      // 自动滚动到当前选中项（当前源/当前集）
+      try {
+        if (artRef.current) {
+          const container = artRef.current;
+          const settingsClickHandler = (e: Event) => {
+            const tapTarget = e.target as HTMLElement | null;
+            if (tapTarget && tapTarget.closest('.art-settings')) {
+              // 面板切换有过渡动画，分两拍重试确保 DOM 已就绪
+              setTimeout(scrollSettingPanelToCurrent, 120);
+              setTimeout(scrollSettingPanelToCurrent, 320);
+            }
+          };
+          container.addEventListener('click', settingsClickHandler, true);
+          settingsScrollHandlerRef.current = settingsClickHandler;
+        }
+      } catch {
+        /* ignore */
+      }
+
+      // 自动播放兜底：部分浏览器（iOS Safari/移动 Chrome）会拦截带声自动播放。
+      // 保持默认有声状态不自动静音，提示用户手动点击播放按钮
       try {
         const playPromise = artPlayerRef.current.video?.play?.() as
           | Promise<void>
@@ -1629,15 +1816,8 @@ function PlayPageClient() {
           playPromise.catch(() => {
             try {
               const art = artPlayerRef.current;
-              if (!art || !art.video) return;
-              art.muted = true;
-              const retry = art.video.play?.();
-              if (retry && typeof retry.catch === 'function') {
-                retry.catch(() => {
-                  /* 静音重试仍被拒绝时保留默认播放按钮，等待用户手动点击 */
-                });
-              }
-              art.notice.show = '已静音播放，点击喇叭图标开启声音';
+              if (!art) return;
+              art.notice.show = '浏览器已阻止自动播放，请点击播放按钮开始观看';
             } catch {
               /* ignore */
             }
@@ -1706,6 +1886,20 @@ function PlayPageClient() {
         lastPlaybackRateRef.current = artPlayerRef.current.playbackRate;
       });
 
+      // 同步系统媒体会话状态（通知栏/浏览器原生播放器界面显示播放状态）
+      try {
+        if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+          artPlayerRef.current.on('video:play', () => {
+            navigator.mediaSession.playbackState = 'playing';
+          });
+          artPlayerRef.current.on('video:pause', () => {
+            navigator.mediaSession.playbackState = 'paused';
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+
       // 监听视频可播放事件，这时恢复播放进度更可靠
       artPlayerRef.current.on('video:canplay', () => {
         // 若存在需要恢复的播放进度，则跳转
@@ -1738,7 +1932,11 @@ function PlayPageClient() {
           ) {
             artPlayerRef.current.playbackRate = lastPlaybackRateRef.current;
           }
-          artPlayerRef.current.notice.show = '';
+          // 仅在真正处于播放状态时才清空提示；自动播放被浏览器拦截时
+          // 保留「请点击播放按钮」提示，避免在数据就绪时被误清除
+          if (!artPlayerRef.current.paused) {
+            artPlayerRef.current.notice.show = '';
+          }
         }, 0);
 
         // 隐藏换源加载状态
