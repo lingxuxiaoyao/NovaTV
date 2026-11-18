@@ -306,11 +306,16 @@ services:
     image: containrrr/watchtower
     restart: unless-stopped
     environment:
-      - WATCHTOWER_HTTP_API_ENABLE=true
+      - WATCHTOWER_HTTP_API_UPDATE=true
       - WATCHTOWER_HTTP_API_TOKEN=自行生成一段随机字符串
+      # watchtower 镜像停更于 2023 年,内置客户端默认只声明 API 1.25,
+      # 低于新版 Docker Engine 的最低要求,需显式声明为引擎支持的最低版本:
+      # docker version --format '{{.Server.MinAPIVersion}}'
+      - DOCKER_API_VERSION=1.40
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     # 与应用容器在同一网络,无需 ports 映射
+    command: --http-api-update novatv-core
 ```
 
 应用容器新增环境变量(与上面 token 保持一致):
@@ -320,7 +325,15 @@ WATCHTOWER_API_URL=http://watchtower:8080
 WATCHTOWER_API_TOKEN=同上
 ```
 
-**切换历史版本**(可选):给应用容器挂载 `/var/run/docker.sock:/var/run/docker.sock`。
+**切换历史版本**(可选):给应用容器挂载 `/var/run/docker.sock:/var/run/docker.sock`。镜像以非 root 用户运行,而 socket 通常属于 `docker` 组,需同时把该组的 gid 加入容器:
+
+```yaml
+novatv-core:
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+  group_add:
+    - '999' # docker stat -c '%g' /var/run/docker.sock 的输出
+```
 
 > ⚠️ 挂载 socket 相当于授予宿主机 root 权限,仅在需要页面回滚版本时添加;不挂载不影响"更新到最新"。
 
@@ -344,6 +357,8 @@ WATCHTOWER_API_TOKEN=同上
 
 - **没配任何通道**:页面按钮不出现,显示对应部署方式的手动命令(Docker 为 `docker compose pull && docker compose up -d`)
 - **更新无变化**:镜像可能仍在 CI 构建(每笔 push 约 5-10 分钟),稍后重试
+- **弹窗提示 `fetch failed`**:更新通道连不上。先确认 watchtower 容器处于 `Up` 状态(反复 `Restarting` 通常是 `DOCKER_API_VERSION` 没配),再看容器名与 `WATCHTOWER_API_URL` 是否一致、是否在同一网络
+- **挂载 socket 后页面仍提示需要启用更新**:确认已加 `group_add`。镜像以非 root 用户运行,仅挂载 socket 而无组权限时会连不上 daemon
 - **私有仓库**:版本历史接口需配置 `GITHUB_TOKEN`
 
 ## AndroidTV 使用
