@@ -92,6 +92,16 @@ interface DataSource {
   from: 'config' | 'custom';
 }
 
+// 视频源测速结果
+interface SourceProbeResult {
+  key: string;
+  ok: boolean;
+  ms: number | null;
+  status?: number;
+  count?: number;
+  error?: string;
+}
+
 // 自定义分类数据类型
 interface CustomCategory {
   name?: string;
@@ -900,6 +910,17 @@ const VideoSourceConfig = ({
   const [sources, setSources] = useState<DataSource[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
   const [orderChanged, setOrderChanged] = useState(false);
+  // 测速结果（仅存于内存，刷新即清空）
+  const [probeResults, setProbeResults] = useState<
+    Record<string, SourceProbeResult>
+  >({});
+  const [probingKey, setProbingKey] = useState<string | null>(null);
+  const [probingAll, setProbingAll] = useState(false);
+  const [probeProgress, setProbeProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [onlySlow, setOnlySlow] = useState(false);
   const [newSource, setNewSource] = useState<DataSource>({
     name: '',
     key: '',
@@ -1015,10 +1036,125 @@ const VideoSourceConfig = ({
       });
   };
 
+  // ---------- 测速 ----------
+  const probe = async (keys?: string[]) => {
+    try {
+      const resp = await fetch('/api/admin/source/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(keys && keys.length ? { keys } : {}),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(data.error || `测速失败: ${resp.status}`);
+      }
+      const list: SourceProbeResult[] = data.results || [];
+      setProbeResults((prev) => {
+        const next = { ...prev };
+        list.forEach((r) => {
+          next[r.key] = r;
+        });
+        return next;
+      });
+      return list;
+    } catch (err) {
+      showError(err instanceof Error ? err.message : '测速失败');
+      return [];
+    }
+  };
+
+  const handleProbeOne = async (key: string) => {
+    if (probingAll || probingKey) return;
+    setProbingKey(key);
+    await probe([key]);
+    setProbingKey(null);
+  };
+
+  const handleProbeAll = async () => {
+    if (probingAll || probingKey) return;
+    const keys = sources.filter((s) => !s.disabled).map((s) => s.key);
+    if (keys.length === 0) {
+      showError('没有启用中的视频源可测速');
+      return;
+    }
+    setProbingAll(true);
+    // 服务端按 4 并发执行，这里按批次推进进度提示
+    const chunk = 4;
+    const merged: SourceProbeResult[] = [];
+    setProbeProgress({ done: 0, total: keys.length });
+    for (let i = 0; i < keys.length; i += chunk) {
+      const part = await probe(keys.slice(i, i + chunk));
+      merged.push(...part);
+      setProbeProgress({
+        done: Math.min(i + chunk, keys.length),
+        total: keys.length,
+      });
+    }
+    setProbeProgress(null);
+    setProbingAll(false);
+    // 自动筛出慢源，省得用户自己找
+    const slow = merged.filter((r) => isSlowResult(r));
+    if (slow.length > 0 && slow.length < keys.length) {
+      setOnlySlow(true);
+    }
+  };
+
+  /** 延迟是否属于「该处理」的档位（0 结果不算慢，可能是该关键词没有片源） */
+  const isSlowResult = (r?: SourceProbeResult) => {
+    if (!r) return false;
+    if (!r.ok) return true;
+    return r.ms !== null && r.ms >= 1000;
+  };
+
+  const latencyClass = (r: SourceProbeResult) => {
+    if (!r.ok) return 'text-red-600 dark:text-red-400';
+    if (r.count === 0) return 'text-amber-600 dark:text-amber-400';
+    const ms = r.ms ?? 0;
+    if (ms < 300) return 'text-green-600 dark:text-green-400';
+    if (ms < 1000) return 'text-amber-600 dark:text-amber-400';
+    return 'text-orange-600 dark:text-orange-400';
+  };
+
+  const latencyText = (r: SourceProbeResult) => {
+    if (!r.ok) return r.error || '失败';
+    if (r.count === 0) return `${r.ms}ms · 0条`;
+    return `${r.ms}ms · ${r.count}条`;
+  };
+
+  /** 延迟单元格（桌面表格） */
+  const LatencyCell = ({ source }: { source: DataSource }) => {
+    const result = probeResults[source.key];
+    const isProbing = probingKey === source.key || probingAll;
+    if (!result) {
+      return (
+        <button
+          onClick={() => handleProbeOne(source.key)}
+          disabled={isProbing || !!source.disabled}
+          title={source.disabled ? '已禁用，不参与测速' : '测试该源响应速度'}
+          className='px-2 py-1 rounded-md text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-40 transition-colors'
+        >
+          {probingKey === source.key ? '…' : '测速'}
+        </button>
+      );
+    }
+    return (
+      <button
+        onClick={() => handleProbeOne(source.key)}
+        disabled={isProbing}
+        title={result.ok ? '点击重新测速' : result.error || ''}
+        className={`px-2 py-1 rounded-md text-xs font-medium hover:underline ${latencyClass(
+          result
+        )}`}
+      >
+        {probingKey === source.key ? '测速中…' : latencyText(result)}
+      </button>
+    );
+  };
+
   // 可拖拽行封装 (dnd-kit)
   const DraggableRow = ({ source }: { source: DataSource }) => {
     const { attributes, listeners, setNodeRef, transform, transition } =
-      useSortable({ id: source.key });
+      useSortable({ id: source.key, disabled: onlySlow });
 
     const style = {
       transform: CSS.Transform.toString(transform),
@@ -1056,6 +1192,9 @@ const VideoSourceConfig = ({
           title={source.detail || '-'}
         >
           {source.detail || '-'}
+        </td>
+        <td className='px-6 py-4 whitespace-nowrap text-sm'>
+          <LatencyCell source={source} />
         </td>
         <td className='px-6 py-4 whitespace-nowrap max-w-[1rem]'>
           <span
@@ -1095,7 +1234,7 @@ const VideoSourceConfig = ({
   // 移动端可拖拽卡片封装 (dnd-kit)
   const DraggableCard = ({ source }: { source: DataSource }) => {
     const { attributes, listeners, setNodeRef, transform, transition } =
-      useSortable({ id: source.key });
+      useSortable({ id: source.key, disabled: onlySlow });
     const style = {
       transform: CSS.Transform.toString(transform),
       transition,
@@ -1138,8 +1277,29 @@ const VideoSourceConfig = ({
               Detail：{source.detail}
             </div>
           )}
+          <div className='truncate'>
+            延迟：
+            {probeResults[source.key] ? (
+              <span className={latencyClass(probeResults[source.key])}>
+                {latencyText(probeResults[source.key])}
+              </span>
+            ) : (
+              <span className='text-gray-400'>未测</span>
+            )}
+          </div>
         </div>
         <div className='flex flex-wrap gap-2 mt-2.5'>
+          <button
+            onClick={() => handleProbeOne(source.key)}
+            disabled={probingAll || !!probingKey || !!source.disabled}
+            className='inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/60 disabled:opacity-40 transition-colors'
+          >
+            {probingKey === source.key
+              ? '测速中…'
+              : probeResults[source.key]
+              ? '重测'
+              : '测速'}
+          </button>
           <button
             onClick={() => handleToggleEnable(source.key)}
             className={`inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium ${
@@ -1171,19 +1331,59 @@ const VideoSourceConfig = ({
     );
   }
 
+  // 筛选仅作用于显示层，不改动真实排序（拖拽顺序会持久化，不能被过滤影响）
+  const shownSources = onlySlow
+    ? sources.filter((s) => isSlowResult(probeResults[s.key]))
+    : sources;
+
   return (
     <div className='space-y-6'>
       {/* 添加视频源表单 */}
-      <div className='flex items-center justify-between'>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
         <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
           视频源列表
+          <span className='ml-2 text-xs font-normal text-gray-400'>
+            {shownSources.length}/{sources.length} 个
+          </span>
         </h4>
-        <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          className='px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg transition-colors'
-        >
-          {showAddForm ? '取消' : '添加视频源'}
-        </button>
+        <div className='flex flex-wrap items-center gap-2'>
+          {(probeProgress || probingAll) && (
+            <span className='text-xs text-gray-500 dark:text-gray-400'>
+              {probeProgress
+                ? `测速中 ${probeProgress.done}/${probeProgress.total}`
+                : '测速中…'}
+            </span>
+          )}
+          {Object.keys(probeResults).length > 0 && (
+            <label className='inline-flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300 cursor-pointer select-none'>
+              <input
+                type='checkbox'
+                checked={onlySlow}
+                onChange={(e) => setOnlySlow(e.target.checked)}
+                className='rounded border-gray-300 dark:border-gray-600'
+              />
+              只看慢源/异常
+            </label>
+          )}
+          <button
+            onClick={handleProbeAll}
+            disabled={probingAll || !!probingKey}
+            className='inline-flex items-center px-3 py-1 rounded-lg text-sm bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors'
+          >
+            {probingAll ? (
+              <Loader2 size={14} className='mr-1 animate-spin' />
+            ) : (
+              <RefreshCw size={14} className='mr-1' />
+            )}
+            全部测速
+          </button>
+          <button
+            onClick={() => setShowAddForm(!showAddForm)}
+            className='px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg transition-colors'
+          >
+            {showAddForm ? '取消' : '添加视频源'}
+          </button>
+        </div>
       </div>
 
       {showAddForm && (
@@ -1257,6 +1457,9 @@ const VideoSourceConfig = ({
                 Detail 地址
               </th>
               <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'>
+                延迟
+              </th>
+              <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'>
                 状态
               </th>
               <th className='px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'>
@@ -1276,7 +1479,7 @@ const VideoSourceConfig = ({
               strategy={verticalListSortingStrategy}
             >
               <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>
-                {sources.map((source) => (
+                {shownSources.map((source) => (
                   <DraggableRow key={source.key} source={source} />
                 ))}
               </tbody>
@@ -1298,7 +1501,7 @@ const VideoSourceConfig = ({
             items={sources.map((s) => s.key)}
             strategy={verticalListSortingStrategy}
           >
-            {sources.map((source) => (
+            {shownSources.map((source) => (
               <DraggableCard key={source.key} source={source} />
             ))}
           </SortableContext>
