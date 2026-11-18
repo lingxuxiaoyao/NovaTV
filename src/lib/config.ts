@@ -100,6 +100,16 @@ async function initConfig() {
         );
 
         apiSiteEntries.forEach(([key, site]) => {
+          const existing = sourceConfigMap.get(key);
+          if (existing) {
+            // 已存在：只同步源信息，保留用户在管理面板里的启用/禁用选择
+            existing.name = site.name;
+            existing.api = site.api;
+            existing.detail = site.detail;
+            existing.from = 'config';
+            return;
+          }
+          // 新增的源默认启用
           sourceConfigMap.set(key, {
             key,
             name: site.name,
@@ -132,7 +142,17 @@ async function initConfig() {
         );
 
         customCategories.forEach((category) => {
-          customCategoriesMap.set(category.query + category.type, {
+          const mapKey = category.query + category.type;
+          const existing = customCategoriesMap.get(mapKey);
+          if (existing) {
+            // 已存在：只同步分类信息，保留用户的启用/禁用选择
+            existing.name = category.name;
+            existing.type = category.type;
+            existing.query = category.query;
+            existing.from = 'config';
+            return;
+          }
+          customCategoriesMap.set(mapKey, {
             name: category.name,
             type: category.type,
             query: category.query,
@@ -347,15 +367,38 @@ export async function getConfig(): Promise<AdminConfig> {
     // 将 Map 转换回数组
     adminConfig.SourceConfig = Array.from(sourceConfigMap.values());
 
-    // 覆盖 CustomCategories
+    // 合并 CustomCategories（保留已有条目的启用/禁用选择）
     const customCategories = fileConfig.custom_category || [];
-    adminConfig.CustomCategories = customCategories.map((category) => ({
-      name: category.name,
-      type: category.type,
-      query: category.query,
-      from: 'config',
-      disabled: false,
-    }));
+    const categoryMap = new Map(
+      (adminConfig.CustomCategories || []).map((c) => [c.query + c.type, c])
+    );
+    customCategories.forEach((category) => {
+      const mapKey = category.query + category.type;
+      const existing = categoryMap.get(mapKey);
+      if (existing) {
+        existing.name = category.name;
+        existing.type = category.type;
+        existing.query = category.query;
+        existing.from = 'config';
+        return;
+      }
+      categoryMap.set(mapKey, {
+        name: category.name,
+        type: category.type,
+        query: category.query,
+        from: 'config',
+        disabled: false,
+      });
+    });
+    const customCategoryKeys = new Set(
+      customCategories.map((c) => c.query + c.type)
+    );
+    categoryMap.forEach((category) => {
+      if (!customCategoryKeys.has(category.query + category.type)) {
+        category.from = 'custom';
+      }
+    });
+    adminConfig.CustomCategories = Array.from(categoryMap.values());
 
     const ownerUser = process.env.USERNAME || '';
     // 检查配置中的站长用户是否和 USERNAME 匹配，如果不匹配则降级为普通用户
