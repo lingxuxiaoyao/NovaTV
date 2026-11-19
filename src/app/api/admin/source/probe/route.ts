@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { API_CONFIG, getConfig } from '@/lib/config';
+import { isSafeExternalUrl } from '@/lib/security';
 
 export const runtime = 'edge';
 
@@ -56,6 +57,17 @@ async function probeSource(
   keyword: string
 ): Promise<ProbeResult> {
   const url = api + API_CONFIG.search.path + encodeURIComponent(keyword);
+  // 管理员后台测速允许内网/NAS 自建源，但依然拦截非 http 协议与云元数据
+  const check = isSafeExternalUrl(url, { allowPrivateNetwork: true });
+  if (!check.safe) {
+    return {
+      key,
+      ok: false,
+      ms: null,
+      error: check.reason || '地址不合规',
+    };
+  }
+
   const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);

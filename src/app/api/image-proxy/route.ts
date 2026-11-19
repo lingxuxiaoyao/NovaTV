@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+import { isSafeExternalUrl } from '@/lib/security';
+
 export const runtime = 'edge';
 
 // OrionTV 兼容接口
@@ -9,6 +11,14 @@ export async function GET(request: Request) {
 
   if (!imageUrl) {
     return NextResponse.json({ error: 'Missing image URL' }, { status: 400 });
+  }
+
+  const check = isSafeExternalUrl(imageUrl);
+  if (!check.safe) {
+    return NextResponse.json(
+      { error: `安全拦截: ${check.reason}` },
+      { status: 400 }
+    );
   }
 
   try {
