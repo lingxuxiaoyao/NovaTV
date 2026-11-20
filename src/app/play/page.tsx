@@ -21,6 +21,7 @@ import {
   saveSkipConfig,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { cleanM3U8 } from '@/lib/m3u8Filter';
 import { probeM3u8Latency } from '@/lib/sourceSpeedTest';
 import { SearchResult } from '@/lib/types';
 import {
@@ -516,26 +517,6 @@ function PlayPageClient() {
     }
   };
 
-  // 去广告相关函数
-  function filterAdsFromM3U8(m3u8Content: string): string {
-    if (!m3u8Content) return '';
-
-    // 按行分割M3U8内容
-    const lines = m3u8Content.split('\n');
-    const filteredLines = [];
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      // 只过滤#EXT-X-DISCONTINUITY标识
-      if (!line.includes('#EXT-X-DISCONTINUITY')) {
-        filteredLines.push(line);
-      }
-    }
-
-    return filteredLines.join('\n');
-  }
-
   // 跳过片头片尾配置相关函数
   const handleSkipConfigChange = async (newConfig: {
     enable: boolean;
@@ -643,23 +624,41 @@ function PlayPageClient() {
       super(config);
       const load = this.load.bind(this);
       this.load = function (context: any, config: any, callbacks: any) {
-        // 拦截manifest和level请求
-        if (
-          (context as any).type === 'manifest' ||
-          (context as any).type === 'level'
-        ) {
+        // 仅拦截 level 请求（包含具体的分片列表，避免拦截 master manifest）
+        if ((context as any).type === 'level') {
           const onSuccess = callbacks.onSuccess;
           callbacks.onSuccess = function (
             response: any,
             stats: any,
-            context: any
+            context: any,
+            networkDetails: any
           ) {
-            // 如果是m3u8文件，处理内容以移除广告分段
+            // 如果是 m3u8 文件，处理内容以移除广告分段
             if (response.data && typeof response.data === 'string') {
-              // 过滤掉广告段 - 实现更精确的广告过滤逻辑
-              response.data = filterAdsFromM3U8(response.data);
+              try {
+                const targetUrl = response.url || (context as any)?.url || '';
+                const res = cleanM3U8(response.data, targetUrl);
+                if (!res.bypassed) {
+                  response.data = res.cleaned;
+                }
+                if (
+                  typeof window !== 'undefined' &&
+                  localStorage.getItem('debug_m3u8') === '1'
+                ) {
+                  console.debug('[m3u8Filter]', {
+                    removed: res.removedCount,
+                    bypassed: res.bypassed,
+                    reason: res.reason,
+                    url: targetUrl,
+                  });
+                }
+              } catch (e) {
+                if (typeof console !== 'undefined' && console.warn) {
+                  console.warn('[CustomHlsJsLoader] 清洗异常已兜底:', e);
+                }
+              }
             }
-            return onSuccess(response, stats, context, null);
+            return onSuccess(response, stats, context, networkDetails);
           };
         }
         // 执行原始load方法
@@ -1633,10 +1632,11 @@ function PlayPageClient() {
               enableWorker: true, // WebWorker 解码，降低主线程压力
               lowLatencyMode: true, // 开启低延迟 LL-HLS
 
-              /* 缓冲/内存相关 */
-              maxBufferLength: 30, // 前向缓冲最大 30s，过大容易导致高延迟
-              backBufferLength: 30, // 仅保留 30s 已播放内容，避免内存占用
-              maxBufferSize: 60 * 1000 * 1000, // 约 60MB，超出后触发清理
+              /* 缓冲/内存相关（行业主流优化配置） */
+              maxBufferLength: 60, // 前向缓冲 60s，增强弱网与第三方聚合源抗抖动能力
+              maxMaxBufferLength: 120, // 最大累积不超过 120s，防止贪婪下载占用过多带宽
+              backBufferLength: 30, // 仅保留 30s 已播放内容，兼顾短倒退与移动端防爆内存
+              maxBufferSize: 100 * 1000 * 1000, // 约 100MB，超出后触发清理
 
               /* 自定义loader */
               loader: blockAdEnabledRef.current
