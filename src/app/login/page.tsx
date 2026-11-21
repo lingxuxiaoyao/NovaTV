@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 
 import { getDeviceId } from '@/lib/db.client';
+import { getClientDeviceHints } from '@/lib/device';
 import { checkForUpdates, CURRENT_VERSION, UpdateStatus } from '@/lib/version';
 
 import { useSite } from '@/components/SiteProvider';
@@ -98,12 +99,14 @@ function LoginPageClient() {
 
     try {
       setLoading(true);
+      const clientDevice = await getClientDeviceHints();
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           password,
           deviceId: getDeviceId(),
+          clientDevice,
           ...(shouldAskUsername ? { username } : {}),
         }),
       });
@@ -131,10 +134,16 @@ function LoginPageClient() {
 
     try {
       setLoading(true);
+      const clientDevice = await getClientDeviceHints();
       const res = await fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, deviceId: getDeviceId() }),
+        body: JSON.stringify({
+          username,
+          password,
+          deviceId: getDeviceId(),
+          clientDevice,
+        }),
       });
 
       if (res.ok) {

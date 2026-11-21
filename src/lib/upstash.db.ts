@@ -374,7 +374,7 @@ export class UpstashRedisStorage implements IStorage {
     )) as Record<string, string>;
 
     return pairs
-      .filter((p) => !isNaN(p.score))
+      .filter((p) => !isNaN(p.score) && p.score > 0)
       .map((p) => ({
         device_id: p.id,
         ua: metas?.[p.id] || '未知设备',

@@ -20,6 +20,13 @@ function getClientIp(request: NextRequest): string {
   );
 }
 
+function checkIsHttps(req: NextRequest): boolean {
+  const proto =
+    req.headers.get('x-forwarded-proto') ||
+    req.nextUrl.protocol.replace(':', '');
+  return proto.split(',')[0].trim().toLowerCase() === 'https';
+}
+
 // 登记登录会话（超过该用户的设备上限时最早的设备被挤出，其登录cookie随即失效）
 async function saveUserSessionSafe(
   username: string,
@@ -135,7 +142,7 @@ export async function POST(req: NextRequest) {
           expires: new Date(0),
           sameSite: 'lax', // 改为 lax 以支持 PWA
           httpOnly: false, // PWA 需要客户端可访问
-          secure: false, // 根据协议自动设置
+          secure: checkIsHttps(req), // 根据协议自动设置
         });
 
         return response;
@@ -169,7 +176,7 @@ export async function POST(req: NextRequest) {
         expires,
         sameSite: 'lax', // 改为 lax 以支持 PWA
         httpOnly: false, // PWA 需要客户端可访问
-        secure: false, // 根据协议自动设置
+        secure: checkIsHttps(req), // 根据协议自动设置
       });
 
       return response;
@@ -180,7 +187,10 @@ export async function POST(req: NextRequest) {
     const { username, password } = body;
     // 设备标识：客户端（登录页）持久保存的 deviceId；缺失时服务端兜底生成，保证 cookie 始终携带设备标识
     const deviceId: string = body.deviceId || crypto.randomUUID();
-    const deviceDesc = parseDeviceDescription(req.headers.get('user-agent'));
+    const deviceDesc = parseDeviceDescription(
+      req.headers.get('user-agent'),
+      body.clientDevice
+    );
     if (!username || typeof username !== 'string') {
       return NextResponse.json({ error: '用户名不能为空' }, { status: 400 });
     }
@@ -210,7 +220,7 @@ export async function POST(req: NextRequest) {
         expires,
         sameSite: 'lax', // 改为 lax 以支持 PWA
         httpOnly: false, // PWA 需要客户端可访问
-        secure: false, // 根据协议自动设置
+        secure: checkIsHttps(req), // 根据协议自动设置
       });
 
       // 登记登录会话（超过设备上限时最早的设备cookie失效）并记录上线信息
@@ -257,7 +267,7 @@ export async function POST(req: NextRequest) {
         expires,
         sameSite: 'lax', // 改为 lax 以支持 PWA
         httpOnly: false, // PWA 需要客户端可访问
-        secure: false, // 根据协议自动设置
+        secure: checkIsHttps(req), // 根据协议自动设置
       });
 
       // 登记登录会话（超过设备上限时最早的设备cookie失效）并记录上线信息

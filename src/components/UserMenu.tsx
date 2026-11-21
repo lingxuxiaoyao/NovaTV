@@ -142,7 +142,23 @@ export const UserMenu: React.FC = () => {
     } catch (error) {
       console.error('注销请求失败:', error);
     }
-    window.location.href = '/';
+
+    // 客户端多维度强制就地擦除 Cookie（覆盖普通与 secure 作用域）
+    try {
+      const pastDate = 'Thu, 01 Jan 1970 00:00:00 GMT';
+      document.cookie = `auth=; path=/; expires=${pastDate}; max-age=0`;
+      document.cookie = `auth=; path=/; expires=${pastDate}; max-age=0; secure`;
+      const hostname = window.location.hostname;
+      if (hostname) {
+        document.cookie = `auth=; path=/; domain=${hostname}; expires=${pastDate}; max-age=0`;
+        document.cookie = `auth=; path=/; domain=${hostname}; expires=${pastDate}; max-age=0; secure`;
+      }
+    } catch (_) {
+      // ignore
+    }
+
+    // 登出后使用 replace 直达登录页，防止后退键回跳并避开 PWA 对首页的离线缓存
+    window.location.replace('/login');
   };
 
   const handleAdminPanel = () => {

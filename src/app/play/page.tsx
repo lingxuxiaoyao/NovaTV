@@ -1433,6 +1433,19 @@ function PlayPageClient() {
     };
   }, [buildProgressPayload, updatePlayHistoryPayload, flushPlayHistory]);
 
+  // 页面卸载时安全销毁播放器实例与底层 HLS 连接，防止路由跳转后后台悬挂播放与拉流
+  useEffect(() => {
+    return () => {
+      if (artPlayerRef.current) {
+        if (artPlayerRef.current.video && artPlayerRef.current.video.hls) {
+          artPlayerRef.current.video.hls.destroy();
+        }
+        artPlayerRef.current.destroy();
+        artPlayerRef.current = null;
+      }
+    };
+  }, []);
+
   // ---------------------------------------------------------------------------
   // 收藏相关
   // ---------------------------------------------------------------------------
@@ -1627,16 +1640,43 @@ function PlayPageClient() {
             if (video.hls) {
               video.hls.destroy();
             }
+
+            // 设备环境嗅探：移动端收紧缓冲防爆内存，桌面端拉满缓冲抗弱网抖动
+            const isMobile =
+              typeof navigator !== 'undefined' &&
+              (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+                (navigator.platform === 'MacIntel' &&
+                  navigator.maxTouchPoints > 1));
+
             const hls = new Hls({
               debug: false, // 关闭日志
               enableWorker: true, // WebWorker 解码，降低主线程压力
               lowLatencyMode: true, // 开启低延迟 LL-HLS
 
-              /* 缓冲/内存相关（行业主流优化配置） */
-              maxBufferLength: 60, // 前向缓冲 60s，增强弱网与第三方聚合源抗抖动能力
-              maxMaxBufferLength: 120, // 最大累积不超过 120s，防止贪婪下载占用过多带宽
-              backBufferLength: 30, // 仅保留 30s 已播放内容，兼顾短倒退与移动端防爆内存
-              maxBufferSize: 100 * 1000 * 1000, // 约 100MB，超出后触发清理
+              /* 缓冲与内存自适应策略 */
+              maxBufferLength: isMobile ? 35 : 60, // 前向目标时长(s)：移动端35s控水位防闪退，桌面端60s增强抗抖
+              maxMaxBufferLength: isMobile ? 60 : 120, // 累积缓冲上限(s)：防止高速网络贪婪下载霸占内存与带宽
+              backBufferLength: 30, // 保留30s历史切片：兼顾短倒退免请求与及时的内存释放
+              maxBufferSize: (isMobile ? 60 : 100) * 1000 * 1000, // 码率折算基准参数（非硬上限），参与换算 8*maxBufferSize/bitrate
+              maxBufferHole: 0.5, // 容忍最多 0.5s 缓冲空洞，防止切片拼接时间戳微小缝隙导致持续卡顿
+
+              /* 切片加载超时与重试策略（防止上游第三方CDN卡死导致播放器停摆） */
+              fragLoadPolicy: {
+                default: {
+                  maxTimeToFirstByteMs: 10000, // 首字节响应超时 10s
+                  maxLoadTimeMs: 30000, // 单切片加载超时 30s（官方默认120s过长，导致网络卡死时长时间黑屏）
+                  timeoutRetry: {
+                    maxNumRetry: 3, // 超时重试 3 次
+                    retryDelayMs: 1000, // 重试初始延迟 1s
+                    maxRetryDelayMs: 4000, // 最大重试延迟 4s
+                  },
+                  errorRetry: {
+                    maxNumRetry: 4, // 网络/HTTP错误重试 4 次
+                    retryDelayMs: 1000,
+                    maxRetryDelayMs: 8000,
+                  },
+                },
+              },
 
               /* 自定义loader */
               loader: blockAdEnabledRef.current
@@ -1648,8 +1688,23 @@ function PlayPageClient() {
             hls.attachMedia(video);
             video.hls = hls;
 
+            // 网络恢复时主动唤醒 HLS 加载
+            const handleOnline = () => {
+              if (video.hls) {
+                console.log('[HLS] 网络恢复在线，尝试重新加载');
+                video.hls.startLoad();
+              }
+            };
+            if (typeof window !== 'undefined') {
+              window.addEventListener('online', handleOnline);
+              hls.on(Hls.Events.DESTROYING, () => {
+                window.removeEventListener('online', handleOnline);
+              });
+            }
+
             ensureVideoSource(video, url);
 
+            let lastStallLogTime = 0;
             hls.on(Hls.Events.ERROR, function (event: any, data: any) {
               console.error('HLS Error:', event, data);
               if (data.fatal) {
@@ -1666,6 +1721,16 @@ function PlayPageClient() {
                     console.log('无法恢复的错误');
                     hls.destroy();
                     break;
+                }
+              } else if (
+                data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR
+              ) {
+                const now = Date.now();
+                if (now - lastStallLogTime > 5000) {
+                  lastStallLogTime = now;
+                  console.warn(
+                    '播放缓冲低位卡顿 (bufferStalledError)，等待分片加载或容差跳过'
+                  );
                 }
               }
             });

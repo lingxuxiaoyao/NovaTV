@@ -537,7 +537,7 @@ export class D1Storage implements IStorage {
       const result = await db
         .prepare(
           `SELECT device_id, ua, session_time FROM user_sessions
-           WHERE username = ?
+           WHERE username = ? AND session_time > 0
            ORDER BY session_time DESC`
         )
         .bind(userName)

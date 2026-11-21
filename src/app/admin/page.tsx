@@ -34,7 +34,14 @@ import {
   Users,
   Video,
 } from 'lucide-react';
-import { Fragment, Suspense, useCallback, useEffect, useState } from 'react';
+import {
+  Fragment,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import Swal from 'sweetalert2';
 
 import { AdminConfig, AdminConfigResult } from '@/lib/admin.types';
@@ -558,7 +565,9 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
   // 访问记录与登录设备面板（桌面表格展开行与移动端卡片共用，紧凑行式布局免横向滚动）
   const renderUserAccessPanel = (user: UserEntry) => {
     const logs = accessData[user.username]?.logs || [];
-    const devices = accessData[user.username]?.devices || [];
+    const devices = (accessData[user.username]?.devices || []).filter(
+      (d) => Number(d.session_time) > 0
+    );
     return (
       <>
         <div className='text-xs font-medium text-gray-500 dark:text-gray-400 mb-2'>
@@ -2568,6 +2577,16 @@ const SystemUpdateTab = () => {
   const [polling, setPolling] = useState(false);
   const [pollMsg, setPollMsg] = useState<string | null>(null);
   const [showGuide, setShowGuide] = useState(false);
+  const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const doCheck = useCallback(async () => {
     setChecking(true);
@@ -2608,6 +2627,10 @@ const SystemUpdateTab = () => {
 
   // 触发更新后轮询版本号,变化即刷新页面
   const pollForRestart = (baseline: string, actionLabel: string) => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
     setPolling(true);
     setPollMsg(`${actionLabel}已触发,站点将短暂重启,正在等待新版本上线…`);
     let tries = 0;
@@ -2619,6 +2642,7 @@ const SystemUpdateTab = () => {
           const data = await res.json();
           if (data.currentVersion && data.currentVersion !== baseline) {
             clearInterval(timer);
+            pollTimerRef.current = null;
             setPolling(false);
             setPollMsg(null);
             showSuccess('更新完成,即将刷新页面');
@@ -2631,10 +2655,12 @@ const SystemUpdateTab = () => {
       }
       if (tries >= 30) {
         clearInterval(timer);
+        pollTimerRef.current = null;
         setPolling(false);
         setPollMsg('迟迟未检测到新版本上线,请检查更新通道日志后手动刷新');
       }
     }, 8000);
+    pollTimerRef.current = timer;
   };
 
   const handleUpdateLatest = async () => {
@@ -2655,11 +2681,19 @@ const SystemUpdateTab = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'updateLatest' }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || '更新失败');
       pollForRestart(checkResult.currentVersion, '更新');
     } catch (e) {
-      showError(e instanceof Error ? e.message : '更新失败');
+      const msg = e instanceof Error ? e.message : '更新失败';
+      // 容错处理：若因容器中途重启或拉取镜像耗时触发超时或网络中断，说明更新其实已经在进行中，自动转入探测轮询
+      if (
+        /timeout|aborted|failed to fetch|networkerror|load failed/i.test(msg)
+      ) {
+        pollForRestart(checkResult.currentVersion, '更新');
+      } else {
+        showError(msg);
+      }
     } finally {
       setUpdating(null);
     }
@@ -2683,11 +2717,18 @@ const SystemUpdateTab = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'updateVersion', version: v.tag }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || '切换失败');
       pollForRestart(checkResult.currentVersion, '版本切换');
     } catch (e) {
-      showError(e instanceof Error ? e.message : '切换失败');
+      const msg = e instanceof Error ? e.message : '切换失败';
+      if (
+        /timeout|aborted|failed to fetch|networkerror|load failed/i.test(msg)
+      ) {
+        pollForRestart(checkResult.currentVersion, '版本切换');
+      } else {
+        showError(msg);
+      }
     } finally {
       setUpdating(null);
     }

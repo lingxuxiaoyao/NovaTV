@@ -416,13 +416,29 @@ export async function triggerUpdateLatest(): Promise<UpdateChannel> {
     if (process.env.WATCHTOWER_API_TOKEN) {
       headers.Authorization = `Bearer ${process.env.WATCHTOWER_API_TOKEN}`;
     }
-    const res = await fetch(`${url.replace(/\/+$/, '')}/v1/update`, {
-      method: 'POST',
-      headers,
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) {
-      throw new Error(`Watchtower 更新请求失败: ${res.status}`);
+    try {
+      const res = await fetch(`${url.replace(/\/+$/, '')}/v1/update`, {
+        method: 'POST',
+        headers,
+        signal: AbortSignal.timeout(90000), // 镜像拉取与解压耗时较长，放宽到 90 秒
+      });
+      if (!res.ok) {
+        throw new Error(`Watchtower 更新请求失败: ${res.status}`);
+      }
+    } catch (e: any) {
+      const msg = String(e?.message || '');
+      // 若 Watchtower 已经在拉取并重启容器，可能导致连接超时或断开
+      // 只要不是明确鉴权失败，超时或断连通常意味着更新正在后台执行中
+      if (
+        msg.includes('aborted') ||
+        msg.includes('timeout') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('fetch failed')
+      ) {
+        console.log('Watchtower 更新请求超时或连接重置(镜像正在拉取中):', msg);
+        return 'watchtower';
+      }
+      throw e;
     }
     return 'watchtower';
   }
@@ -432,7 +448,7 @@ export async function triggerUpdateLatest(): Promise<UpdateChannel> {
     if (!hookUrl) throw new Error('VERCEL_DEPLOY_HOOK_URL 未配置');
     const res = await fetch(hookUrl, {
       method: 'POST',
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(30000),
     });
     if (!res.ok) throw new Error(`Vercel Deploy Hook 触发失败: ${res.status}`);
     return 'vercel';
@@ -443,7 +459,7 @@ export async function triggerUpdateLatest(): Promise<UpdateChannel> {
     if (!hookUrl) throw new Error('CF_PAGES_DEPLOY_HOOK_URL 未配置');
     const res = await fetch(hookUrl, {
       method: 'POST',
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(30000),
     });
     if (!res.ok)
       throw new Error(`Cloudflare Deploy Hook 触发失败: ${res.status}`);

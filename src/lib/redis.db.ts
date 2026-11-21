@@ -363,7 +363,7 @@ export class RedisStorage implements IStorage {
         ua: metaMap[ensureString((item as any).value ?? item)] || '未知设备',
         session_time: Number((item as any).score),
       }))
-      .filter((d) => !isNaN(d.session_time))
+      .filter((d) => !isNaN(d.session_time) && d.session_time > 0)
       .sort((a, b) => b.session_time - a.session_time);
   }
 
