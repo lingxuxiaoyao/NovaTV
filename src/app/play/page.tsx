@@ -236,6 +236,7 @@ function PlayPageClient() {
       : 5000;
 
   const artPlayerRef = useRef<any>(null);
+  const hlsInstanceRef = useRef<any>(null);
   const artRef = useRef<HTMLDivElement | null>(null);
 
   // -----------------------------------------------------------------------------
@@ -624,8 +625,11 @@ function PlayPageClient() {
       super(config);
       const load = this.load.bind(this);
       this.load = function (context: any, config: any, callbacks: any) {
-        // 仅拦截 level 请求（包含具体的分片列表，避免拦截 master manifest）
-        if ((context as any).type === 'level') {
+        // 拦截 manifest 和 level 请求（单级 M3U8 在 Hls.js 中类型为 manifest，多级为 level，cleanM3U8 内部会自动安全放行 Master 索引）
+        if (
+          (context as any).type === 'manifest' ||
+          (context as any).type === 'level'
+        ) {
           const onSuccess = callbacks.onSuccess;
           callbacks.onSuccess = function (
             response: any,
@@ -641,9 +645,15 @@ function PlayPageClient() {
                 if (!res.bypassed) {
                   response.data = res.cleaned;
                 }
+                if (res.removedCount > 0) {
+                  console.info(
+                    `[去广告] 已成功拦截并清除 ${res.removedCount} 个广告分片`
+                  );
+                }
                 if (
                   typeof window !== 'undefined' &&
-                  localStorage.getItem('debug_m3u8') === '1'
+                  (localStorage.getItem('debug_m3u8') === '1' ||
+                    res.removedCount > 0)
                 ) {
                   console.debug('[m3u8Filter]', {
                     removed: res.removedCount,
@@ -1022,7 +1032,7 @@ function PlayPageClient() {
         html: '切换播放源',
         width: 260,
         icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 7h11m0 0-3-3m3 3-3 3M20 17H9m0 0 3-3m-3 3 3 3" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-        selector: sorted.map((s) => {
+        selector: sorted.map((s, idx) => {
           const info = precomputedVideoInfoRef.current.get(
             `${s.source}-${s.id}`
           );
@@ -1052,24 +1062,23 @@ function PlayPageClient() {
                   metaParts.join(' · ')
                 )})</span>`
               : '';
+          const displayName = s.source_name || s.title || s.source;
           return {
             html: `<span data-source="${escapeHtml(
               s.source
             )}" data-id="${escapeHtml(s.id)}" data-title="${escapeHtml(
               s.title || ''
-            )}">${escapeHtml(
-              s.source_name || s.title || s.source
-            )}${meta}</span>`,
+            )}">${escapeHtml(displayName)}${meta}</span>`,
             default:
               s.source?.toString() === currentSourceRef.current?.toString() &&
               s.id?.toString() === currentIdRef.current?.toString(),
             // 自定义数据直接挂在 selector item 上，onSelect 通过 item 参数读取。
-            // 此前只挂在内层 span 的 data-* 上，而 ArtPlayer 传入的 $dom 是
-            // 外层条目元素，dataset 读不到，导致面板里换源点击无效
             source: s.source,
             id: s.id,
             title: s.title || '',
-            name: s.source_name || s.title || s.source,
+            displayName,
+            // 唯一标识符，杜绝因同名源（如多个"暴风资源"）导致 ArtplayerError: The [...] is already exist in [setting] 崩溃
+            name: `${s.source}_${s.id}_${idx}`,
           };
         }),
         onSelect: function (item: any, $dom?: HTMLElement) {
@@ -1084,7 +1093,7 @@ function PlayPageClient() {
             handleSourceChange(String(source), String(id), String(title));
           }
           // 返回值作为父级条目的 tooltip 提示
-          return String(item?.name || '');
+          return String(item?.displayName || item?.title || item?.name || '');
         },
       });
     }
@@ -1436,11 +1445,27 @@ function PlayPageClient() {
   // 页面卸载时安全销毁播放器实例与底层 HLS 连接，防止路由跳转后后台悬挂播放与拉流
   useEffect(() => {
     return () => {
+      if (hlsInstanceRef.current) {
+        try {
+          hlsInstanceRef.current.destroy();
+        } catch {
+          /* ignore */
+        }
+        hlsInstanceRef.current = null;
+      }
       if (artPlayerRef.current) {
         if (artPlayerRef.current.video && artPlayerRef.current.video.hls) {
-          artPlayerRef.current.video.hls.destroy();
+          try {
+            artPlayerRef.current.video.hls.destroy();
+          } catch {
+            /* ignore */
+          }
         }
-        artPlayerRef.current.destroy();
+        try {
+          artPlayerRef.current.destroy();
+        } catch {
+          /* ignore */
+        }
         artPlayerRef.current = null;
       }
     };
@@ -1637,8 +1662,21 @@ function PlayPageClient() {
               return;
             }
 
+            if (hlsInstanceRef.current) {
+              try {
+                hlsInstanceRef.current.destroy();
+              } catch {
+                /* ignore */
+              }
+              hlsInstanceRef.current = null;
+            }
+
             if (video.hls) {
-              video.hls.destroy();
+              try {
+                video.hls.destroy();
+              } catch {
+                /* ignore */
+              }
             }
 
             // 设备环境嗅探：移动端收紧缓冲防爆内存，桌面端拉满缓冲抗弱网抖动
@@ -1660,19 +1698,19 @@ function PlayPageClient() {
               maxBufferSize: (isMobile ? 60 : 100) * 1000 * 1000, // 码率折算基准参数（非硬上限），参与换算 8*maxBufferSize/bitrate
               maxBufferHole: 0.5, // 容忍最多 0.5s 缓冲空洞，防止切片拼接时间戳微小缝隙导致持续卡顿
 
-              /* 切片加载超时与重试策略（防止上游第三方CDN卡死导致播放器停摆） */
+              /* 切片加载超时与重试策略（加入指数退避与随机抖动，防止机械固定间隔被 CDN 防火墙拦截） */
               fragLoadPolicy: {
                 default: {
                   maxTimeToFirstByteMs: 10000, // 首字节响应超时 10s
                   maxLoadTimeMs: 30000, // 单切片加载超时 30s（官方默认120s过长，导致网络卡死时长时间黑屏）
                   timeoutRetry: {
                     maxNumRetry: 3, // 超时重试 3 次
-                    retryDelayMs: 1000, // 重试初始延迟 1s
-                    maxRetryDelayMs: 4000, // 最大重试延迟 4s
+                    retryDelayMs: 1500, // 初始退避 1.5s
+                    maxRetryDelayMs: 6000, // 阶梯递增上限 6s
                   },
                   errorRetry: {
                     maxNumRetry: 4, // 网络/HTTP错误重试 4 次
-                    retryDelayMs: 1000,
+                    retryDelayMs: 1500,
                     maxRetryDelayMs: 8000,
                   },
                 },
@@ -1684,6 +1722,7 @@ function PlayPageClient() {
                 : Hls.DefaultConfig.loader,
             });
 
+            hlsInstanceRef.current = hls;
             hls.loadSource(url);
             hls.attachMedia(video);
             video.hls = hls;
@@ -1704,21 +1743,53 @@ function PlayPageClient() {
 
             ensureVideoSource(video, url);
 
+            let networkErrorRetryCount = 0;
+            let retryTimer: NodeJS.Timeout | null = null;
             let lastStallLogTime = 0;
+
+            hls.on(Hls.Events.DESTROYING, () => {
+              if (retryTimer) {
+                clearTimeout(retryTimer);
+                retryTimer = null;
+              }
+            });
+
             hls.on(Hls.Events.ERROR, function (event: any, data: any) {
               console.error('HLS Error:', event, data);
               if (data.fatal) {
                 switch (data.type) {
                   case Hls.ErrorTypes.NETWORK_ERROR:
-                    console.log('网络错误，尝试恢复...');
-                    hls.startLoad();
+                    networkErrorRetryCount++;
+                    if (networkErrorRetryCount <= 3) {
+                      // 阶梯式指数退避（1.5s -> 3s -> 6s）+ 随机抖动 Jitter（0~600ms），打破机械固定重试
+                      const backoff = Math.min(
+                        6000,
+                        1500 * Math.pow(2, networkErrorRetryCount - 1)
+                      );
+                      const jitter = Math.floor(Math.random() * 600);
+                      const delay = backoff + jitter;
+                      console.warn(
+                        `网络/解析错误，将在 ${delay}ms 后进行第 ${networkErrorRetryCount}/3 次智能恢复...`
+                      );
+                      if (retryTimer) clearTimeout(retryTimer);
+                      retryTimer = setTimeout(() => {
+                        if (video.hls && video.hls === hls) {
+                          hls.startLoad();
+                        }
+                      }, delay);
+                    } else {
+                      console.error(
+                        '网络错误重试达到上限（3次），停止重试防止死循环'
+                      );
+                      hls.destroy();
+                    }
                     break;
                   case Hls.ErrorTypes.MEDIA_ERROR:
                     console.log('媒体错误，尝试恢复...');
                     hls.recoverMediaError();
                     break;
                   default:
-                    console.log('无法恢复的错误');
+                    console.log('无法恢复的错误，销毁 HLS 实例');
                     hls.destroy();
                     break;
                 }

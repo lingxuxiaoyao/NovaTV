@@ -204,9 +204,11 @@ export function cleanM3U8(content: string, baseUrl: string): CleanResult {
       const line = rawLine.trim();
       if (!line) continue;
 
-      // B2: 优先捕获 #EXT-X-ENDLIST，绝不允许在 inCueAd 区间内被吞掉
+      // B2: 优先捕获 #EXT-X-ENDLIST，绝不允许在 inCueAd 区间内被吞掉，同时严格去重防止播放器报 levelParsingError
       if (/^#EXT-X-ENDLIST/i.test(line)) {
-        footerLines.push(line);
+        if (!footerLines.some((fl) => /^#EXT-X-ENDLIST/i.test(fl))) {
+          footerLines.push(line);
+        }
         inCueAd = false;
         cueBufferedTags = [];
         continue;
