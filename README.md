@@ -32,6 +32,7 @@
 - ⚡ **单源超时隔离与测速排序**：聚合搜索与详情接口支持单源独立超时控制与 `Promise.allSettled` 容错隔离，并按资源站响应延迟从快到慢排序。
 - 🚀 **M3U8 并发测速与安全进度同步**：新增 M3U8 首包并发测速模块与消除闭包陈旧状态的 `useSafePlayHistory` 播放进度同步 Hook。
 - 🔄 **站长面板一键更新**：检查新版本、查看每个版本的更新内容、一键升级到最新；Docker 部署还支持在页面切换/回滚到任意历史版本。
+- 💾 **私人网盘影库**：原生对接 OpenList / AList v3 API，支持夸克、115、阿里云盘、移动云盘等网盘挂载浏览与播放，支持 302 客户端直连（0 服务器流量消耗）与独立用户权限控制。
 
 <details>
   <summary>点击查看项目截图</summary>
@@ -162,9 +163,35 @@ services:
       - '3000:3000'
     environment:
       - PASSWORD=your_password
+      # --- 私人网盘 (OpenList / AList) 预置配置（可选，也可在管理后台直接配置） ---
+      # - PAN_ENABLED=true                     # 开启私人网盘影库
+      # - OPENLIST_URL=http://alist:5244       # AList 地址（同网络直接使用容器名）
+      # - OPENLIST_TOKEN=your_alist_token      # AList 管理员 Token（在 AList 后台「设置」获取）
+      # - PAN_ROOT_PATH=/                      # 挂载根路径，默认 /
     # 如需自定义配置，可挂载文件
     # volumes:
     #   - ./config.json:/app/config.json:ro
+
+  # --- 私人网盘影库服务 (OpenList / AList v3，可选按需启用) ---
+  # alist:
+  #   image: xhofe/alist:latest
+  #   container_name: alist
+  #   restart: unless-stopped
+  #   ports:
+  #     - '5244:5244'
+  #   volumes:
+  #     - ./data/alist:/opt/alist/data
+  #   environment:
+  #     - PUID=0
+  #     - PGID=0
+  #     - UMASK=022
+  #   # 【重要使用提示】：
+  #   # 1. 初始管理员密码：首次启动容器后，在宿主机执行 `docker exec -it alist ./alist admin` 查看账号密码
+  #   # 2. 开启 302 客户端直连（0 服务器流量占用）：进入 AList 管理后台添加网盘后，请在「存储」中编辑该网盘：
+  #   #    - 关闭「Web 代理 (Web Proxy)」（不勾选）
+  #   #    - 将「WebDAV 策略」更改为「302 重定向 (302_redirect)」
+  #   #    配置后播放器将直连网盘官方 CDN，跑满宽带且 0 经过服务器中转！
+  #   # 3. 开启搜索索引：进入 AList 后台「设置」->「索引」，将「搜索引擎」改为 database 并重建索引即可支持快速检索
 ```
 
 ### Redis 版本（推荐，多账户数据隔离，跨设备同步）
@@ -183,13 +210,20 @@ services:
       - NEXT_PUBLIC_STORAGE_TYPE=redis
       - REDIS_URL=redis://novatv-redis:6379
       - NEXT_PUBLIC_ENABLE_REGISTER=true
+      # --- 私人网盘 (OpenList / AList) 预置配置（可选，也可在管理后台直接配置） ---
+      # - PAN_ENABLED=true                     # 开启私人网盘影库
+      # - OPENLIST_URL=http://novatv-alist:5244 # AList 服务地址（同网络直接使用容器名）
+      # - OPENLIST_TOKEN=your_alist_token      # AList 管理员 Token
+      # - PAN_ROOT_PATH=/                      # 挂载根路径，默认 /
     networks:
       - novatv-network
     depends_on:
       - novatv-redis
+      # - novatv-alist
     # 如需自定义配置，可挂载文件
     # volumes:
     #   - ./config.json:/app/config.json:ro
+
   novatv-redis:
     image: redis
     container_name: novatv-redis
@@ -199,6 +233,29 @@ services:
     # 如需持久化
     # volumes:
     #   - ./data:/data
+
+  # --- 私人网盘影库服务 (OpenList / AList v3，可选按需启用) ---
+  # novatv-alist:
+  #   image: xhofe/alist:latest
+  #   container_name: novatv-alist
+  #   restart: unless-stopped
+  #   ports:
+  #     - '5244:5244'
+  #   volumes:
+  #     - ./data/alist:/opt/alist/data
+  #   networks:
+  #     - novatv-network
+  #   environment:
+  #     - PUID=0
+  #     - PGID=0
+  #     - UMASK=022
+  #   # 【重要使用提示】：
+  #   # 1. 初始管理员密码：首次启动容器后，在宿主机执行 `docker exec -it novatv-alist ./alist admin` 查看账号密码
+  #   # 2. 开启 302 客户端直连（0 服务器流量占用）：进入 AList 管理后台添加网盘后，请在「存储」中编辑该网盘：
+  #   #    - 关闭「Web 代理 (Web Proxy)」（不勾选）
+  #   #    - 将「WebDAV 策略」更改为「302 重定向 (302_redirect)」
+  #   #    配置后播放器将直连网盘官方 CDN，跑满宽带且 0 经过服务器中转！
+  #   # 3. 开启搜索索引：进入 AList 后台「设置」->「索引」，将「搜索引擎」改为 database 并重建索引即可支持快速检索
 networks:
   novatv-network:
     driver: bridge
@@ -232,6 +289,10 @@ networks:
 | VERCEL_DEPLOY_HOOK_URL            | Vercel Deploy Hook,配置后可页面触发重新部署     | url                              | 空                                                                                                                         |
 | CF_PAGES_DEPLOY_HOOK_URL          | Cloudflare Pages Deploy Hook,同上               | url                              | 空                                                                                                                         |
 | GITHUB_TOKEN                      | 可选,仓库转私有后查版本历史需要                 | token                            | 空                                                                                                                         |
+| PAN_ENABLED                       | 启用私人网盘影库功能（也可在后台开启）          | true / false                     | false                                                                                                                      |
+| OPENLIST_URL                      | OpenList / AList 服务地址                       | url (如 `http://alist:5244`)     | (空)                                                                                                                       |
+| OPENLIST_TOKEN                    | OpenList / AList 管理员 Token                   | 任意字符串                       | (空)                                                                                                                       |
+| PAN_ROOT_PATH                     | 私人网盘挂载根路径                              | 路径字符串                       | `/`                                                                                                                        |
 
 > 登录设备数量限制：在管理后台按用户单独配置（默认 0 = 不限制，超出上限时最早登录的设备失效），不再使用环境变量。
 
