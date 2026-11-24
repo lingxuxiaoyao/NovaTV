@@ -2,7 +2,16 @@
 
 'use client';
 
-import { Clover, Film, Home, Menu, Search, Star, Tv } from 'lucide-react';
+import {
+  Clover,
+  Film,
+  HardDrive,
+  Home,
+  Menu,
+  Search,
+  Star,
+  Tv,
+} from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -154,6 +163,29 @@ const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
         },
       ]);
     }
+
+    // 检测网盘影库是否对当前用户开启
+    fetch('/api/pan/status')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.enabled && data?.allowPan) {
+          setMenuItems((prevItems) => {
+            if (prevItems.some((item) => item.href === '/pan'))
+              return prevItems;
+            return [
+              ...prevItems,
+              {
+                icon: HardDrive,
+                label: '网盘',
+                href: '/pan',
+              },
+            ];
+          });
+        }
+      })
+      .catch(() => {
+        // 静默忽略无网或未登录错误
+      });
   }, []);
 
   return (
@@ -213,7 +245,7 @@ const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
               </Link>
               <Link
                 href='/search'
-                onClick={(e) => {
+                onClick={(e: React.MouseEvent) => {
                   e.preventDefault();
                   handleSearchClick();
                   setActive('/search');
@@ -247,6 +279,8 @@ const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
 
                   const isActive =
                     decodedActive === decodedItemHref ||
+                    (decodedItemHref === '/pan' &&
+                      decodedActive.startsWith('/pan')) ||
                     (decodedActive.startsWith('/douban') &&
                       decodedActive.includes(`type=${typeMatch}`));
                   const Icon = item.icon;

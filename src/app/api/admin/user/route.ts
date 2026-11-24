@@ -20,6 +20,7 @@ const ACTIONS = [
   'setAllowRegister',
   'changePassword',
   'deleteUser',
+  'setAllowPan',
 ] as const;
 
 export async function POST(request: NextRequest) {
@@ -46,12 +47,14 @@ export async function POST(request: NextRequest) {
       targetUsername, // 目标用户名
       targetPassword, // 目标用户密码（仅在添加用户/修改密码时需要）
       targetDeviceLimit, // 目标用户设备数量上限（仅在设置设备上限时需要）
+      targetAllowPan, // 目标用户网盘权限（仅在设置网盘权限时需要）
       allowRegister,
       action,
     } = body as {
       targetUsername?: string;
       targetPassword?: string;
       targetDeviceLimit?: number;
+      targetAllowPan?: boolean;
       allowRegister?: boolean;
       action?: (typeof ACTIONS)[number];
     };
@@ -253,6 +256,22 @@ export async function POST(request: NextRequest) {
             );
           }
           targetEntry.device_limit = targetDeviceLimit;
+          break;
+        }
+        case 'setAllowPan': {
+          if (!targetEntry) {
+            return NextResponse.json(
+              { error: '目标用户不存在' },
+              { status: 404 }
+            );
+          }
+          if (typeof targetAllowPan !== 'boolean') {
+            return NextResponse.json(
+              { error: '参数格式错误' },
+              { status: 400 }
+            );
+          }
+          targetEntry.allowPan = targetAllowPan;
           break;
         }
         case 'changePassword': {

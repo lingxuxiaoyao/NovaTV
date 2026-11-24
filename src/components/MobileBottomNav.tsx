@@ -2,7 +2,7 @@
 
 'use client';
 
-import { Clover, Film, Home, Search, Star, Tv } from 'lucide-react';
+import { Clover, Film, HardDrive, Home, Search, Star, Tv } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -52,6 +52,29 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
         },
       ]);
     }
+
+    // 检测网盘影库是否对当前用户开启
+    fetch('/api/pan/status')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.enabled && data?.allowPan) {
+          setNavItems((prevItems) => {
+            if (prevItems.some((item) => item.href === '/pan'))
+              return prevItems;
+            return [
+              ...prevItems,
+              {
+                icon: HardDrive,
+                label: '网盘',
+                href: '/pan',
+              },
+            ];
+          });
+        }
+      })
+      .catch(() => {
+        // 静默忽略无网或未登录错误
+      });
   }, []);
 
   const isActive = (href: string) => {
@@ -63,6 +86,7 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
 
     return (
       decodedActive === decodedItemHref ||
+      (decodedItemHref === '/pan' && decodedActive.startsWith('/pan')) ||
       (decodedActive.startsWith('/douban') &&
         decodedActive.includes(`type=${typeMatch}`))
     );

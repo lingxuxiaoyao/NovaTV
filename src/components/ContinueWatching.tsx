@@ -79,10 +79,16 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
     return (record.play_time / record.total_time) * 100;
   };
 
-  // 从 key 中解析 source 和 id
+  // 从 key 中解析 source 和 id (使用 indexOf 切分首个加号，安全处理文件名中含 + 的路径)
   const parseKey = (key: string) => {
-    const [source, id] = key.split('+');
-    return { source, id };
+    const firstPlus = key.indexOf('+');
+    if (firstPlus === -1) {
+      return { source: key, id: '' };
+    }
+    return {
+      source: key.slice(0, firstPlus),
+      id: key.slice(firstPlus + 1),
+    };
   };
 
   return (

@@ -2,8 +2,17 @@
 
 import { getStorage } from '@/lib/db';
 
-import { AdminConfig } from './admin.types';
+import { AdminConfig, PanConfig } from './admin.types';
 import runtimeConfig from './runtime';
+
+export function getDefaultPanConfig(): PanConfig {
+  return {
+    enabled: process.env.PAN_ENABLED === 'true',
+    openlistUrl: process.env.OPENLIST_URL || '',
+    openlistToken: process.env.OPENLIST_TOKEN || '',
+    rootPath: process.env.PAN_ROOT_PATH || '/',
+  };
+}
 
 export interface ApiSite {
   key: string;
@@ -135,6 +144,9 @@ async function initConfig() {
         if (!adminConfig.CustomCategories) {
           adminConfig.CustomCategories = [];
         }
+        if (!adminConfig.PanConfig) {
+          adminConfig.PanConfig = getDefaultPanConfig();
+        }
 
         // 补全 CustomCategories
         const customCategoriesMap = new Map(
@@ -243,6 +255,7 @@ async function initConfig() {
             from: 'config',
             disabled: false,
           })),
+          PanConfig: getDefaultPanConfig(),
         };
       }
 
@@ -292,6 +305,7 @@ async function initConfig() {
           from: 'config',
           disabled: false,
         })) || [],
+      PanConfig: getDefaultPanConfig(),
     } as AdminConfig;
   }
 }
@@ -312,6 +326,9 @@ export async function getConfig(): Promise<AdminConfig> {
     // 确保 CustomCategories 被初始化
     if (!adminConfig.CustomCategories) {
       adminConfig.CustomCategories = [];
+    }
+    if (!adminConfig.PanConfig) {
+      adminConfig.PanConfig = getDefaultPanConfig();
     }
 
     // 合并一些环境变量配置
@@ -506,6 +523,7 @@ export async function resetConfig() {
             disabled: false,
           })) || []
         : [],
+    PanConfig: getDefaultPanConfig(),
   } as AdminConfig;
 
   if (storage && typeof (storage as any).setAdminConfig === 'function') {
@@ -519,6 +537,7 @@ export async function resetConfig() {
   cachedConfig.UserConfig = adminConfig.UserConfig;
   cachedConfig.SourceConfig = adminConfig.SourceConfig;
   cachedConfig.CustomCategories = adminConfig.CustomCategories;
+  cachedConfig.PanConfig = adminConfig.PanConfig;
 }
 
 // 读取指定用户的登录设备数量上限（管理端按用户单独配置；0 或缺省 = 不限制）
@@ -551,4 +570,45 @@ export async function getAvailableApiSites(): Promise<ApiSite[]> {
     api: s.api,
     detail: s.detail,
   }));
+}
+
+export async function checkUserPanPermission(username?: string): Promise<{
+  enabled: boolean;
+  allowed: boolean;
+  config?: PanConfig;
+}> {
+  try {
+    const config = await getConfig();
+    const panConfig = config.PanConfig || getDefaultPanConfig();
+
+    if (!panConfig.enabled) {
+      return { enabled: false, allowed: false };
+    }
+
+    if (!username) {
+      return { enabled: true, allowed: false };
+    }
+
+    const ownerUser = process.env.USERNAME;
+    if (ownerUser && username === ownerUser) {
+      return { enabled: true, allowed: true, config: panConfig };
+    }
+
+    const user = config.UserConfig.Users.find((u) => u.username === username);
+    if (!user) {
+      return { enabled: true, allowed: false };
+    }
+
+    const isPrivileged = user.role === 'owner' || user.role === 'admin';
+    const isAllowed = isPrivileged || user.allowPan === true;
+
+    return {
+      enabled: true,
+      allowed: isAllowed,
+      config: isAllowed ? panConfig : undefined,
+    };
+  } catch (err) {
+    console.error('检查用户网盘权限失败:', err);
+    return { enabled: false, allowed: false };
+  }
 }

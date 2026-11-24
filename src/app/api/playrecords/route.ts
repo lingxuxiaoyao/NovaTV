@@ -53,8 +53,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 从key中解析source和id
-    const [source, id] = key.split('+');
+    // 从key中解析source和id (使用 indexOf 切分首个加号，安全处理文件名中含 + 的路径)
+    const plusIndex = key.indexOf('+');
+    const source = plusIndex > -1 ? key.slice(0, plusIndex) : '';
+    const id = plusIndex > -1 ? key.slice(plusIndex + 1) : '';
     if (!source || !id) {
       return NextResponse.json(
         { error: 'Invalid key format' },
@@ -93,7 +95,9 @@ export async function DELETE(request: NextRequest) {
 
     if (key) {
       // 如果提供了 key，删除单条播放记录
-      const [source, id] = key.split('+');
+      const plusIndex = key.indexOf('+');
+      const source = plusIndex > -1 ? key.slice(0, plusIndex) : '';
+      const id = plusIndex > -1 ? key.slice(plusIndex + 1) : '';
       if (!source || !id) {
         return NextResponse.json(
           { error: 'Invalid key format' },
@@ -108,7 +112,9 @@ export async function DELETE(request: NextRequest) {
       const all = await db.getAllPlayRecords(username);
       await Promise.all(
         Object.keys(all).map(async (k) => {
-          const [s, i] = k.split('+');
+          const idx = k.indexOf('+');
+          const s = idx > -1 ? k.slice(0, idx) : '';
+          const i = idx > -1 ? k.slice(idx + 1) : '';
           if (s && i) await db.deletePlayRecord(username, s, i);
         })
       );

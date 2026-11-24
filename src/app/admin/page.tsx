@@ -28,6 +28,8 @@ import {
   Copy,
   FolderOpen,
   GripVertical,
+  HardDrive,
+  Info,
   Loader2,
   RefreshCw,
   Settings,
@@ -44,7 +46,7 @@ import {
 } from 'react';
 import Swal from 'sweetalert2';
 
-import { AdminConfig, AdminConfigResult } from '@/lib/admin.types';
+import { AdminConfig, AdminConfigResult, PanConfig } from '@/lib/admin.types';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 
 import PageLayout from '@/components/PageLayout';
@@ -339,10 +341,12 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
       | 'cancelAdmin'
       | 'setDeviceLimit'
       | 'changePassword'
-      | 'deleteUser',
+      | 'deleteUser'
+      | 'setAllowPan',
     targetUsername: string,
     targetPassword?: string,
-    targetDeviceLimit?: number
+    targetDeviceLimit?: number,
+    targetAllowPan?: boolean
   ): Promise<boolean> => {
     try {
       const res = await fetch('/api/admin/user', {
@@ -354,6 +358,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
           ...(typeof targetDeviceLimit === 'number'
             ? { targetDeviceLimit }
             : {}),
+          ...(typeof targetAllowPan === 'boolean' ? { targetAllowPan } : {}),
           action,
         }),
       });
@@ -369,6 +374,23 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
     } catch (err) {
       showError(err instanceof Error ? err.message : '操作失败');
       return false;
+    }
+  };
+
+  const handleTogglePan = async (username: string, allow: boolean) => {
+    const ok = await handleUserAction(
+      'setAllowPan',
+      username,
+      undefined,
+      undefined,
+      allow
+    );
+    if (ok) {
+      showSuccess(
+        allow
+          ? `已为用户 ${username} 开通私人网盘权限`
+          : `已关闭用户 ${username} 的私人网盘权限`
+      );
     }
   };
 
@@ -463,6 +485,29 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
     </span>
   );
 
+  // 网盘权限徽章（桌面表格与移动端卡片共用）
+  const renderPanBadge = (user: UserEntry) => {
+    const isOwnerOrAdmin = user.role === 'owner' || user.role === 'admin';
+    if (isOwnerOrAdmin) {
+      return (
+        <span className='px-2 py-1 text-xs rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300 font-medium'>
+          网盘(默认全权)
+        </span>
+      );
+    }
+    return (
+      <span
+        className={`px-2 py-1 text-xs rounded-full ${
+          user.allowPan
+            ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300 font-medium'
+            : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+        }`}
+      >
+        {user.allowPan ? '网盘已开通' : '网盘未授权'}
+      </span>
+    );
+  };
+
   // 用户操作按钮（桌面表格与移动端卡片共用），加大触控目标
   const renderUserActions = (user: UserEntry) => {
     // 修改密码权限：站长可修改管理员和普通用户密码，管理员可修改普通用户和自己的密码，但任何人都不能修改站长密码
@@ -514,6 +559,19 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
             >
               设备上限
             </button>
+            {/* 网盘权限开关（普通用户可单独授权） */}
+            {user.role === 'user' && (
+              <button
+                onClick={() => handleTogglePan(user.username, !user.allowPan)}
+                className={`inline-flex items-center px-3 py-2 min-h-[36px] rounded-full text-xs font-medium transition-colors ${
+                  user.allowPan
+                    ? 'bg-amber-100 text-amber-800 hover:bg-amber-200 dark:bg-amber-900/40 dark:hover:bg-amber-900/60 dark:text-amber-200'
+                    : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-900/40 dark:hover:bg-emerald-900/60 dark:text-emerald-200'
+                }`}
+              >
+                {user.allowPan ? '关闭网盘' : '开通网盘'}
+              </button>
+            )}
             {/* 其他操作按钮 */}
             {user.role === 'user' && (
               <button
@@ -785,6 +843,12 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                   scope='col'
                   className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'
                 >
+                  网盘权限
+                </th>
+                <th
+                  scope='col'
+                  className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'
+                >
                   使用时长
                 </th>
                 <th
@@ -821,6 +885,9 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                       <td className='px-6 py-4 whitespace-nowrap'>
                         {renderStatusBadge(user)}
                       </td>
+                      <td className='px-6 py-4 whitespace-nowrap'>
+                        {renderPanBadge(user)}
+                      </td>
                       <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
                         {formatUsageDuration(
                           accessData[user.username]?.usage_total || 0
@@ -849,7 +916,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                         key={`${user.username}-access`}
                         className='bg-gray-50 dark:bg-gray-900'
                       >
-                        <td colSpan={8} className='px-6 py-4'>
+                        <td colSpan={9} className='px-6 py-4'>
                           {renderUserAccessPanel(user)}
                         </td>
                       </tr>
@@ -880,6 +947,7 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                   </span>
                   {renderRoleBadge(user)}
                   {renderStatusBadge(user)}
+                  {renderPanBadge(user)}
                 </div>
                 <div className='mt-1.5 text-xs text-gray-500 dark:text-gray-400 flex flex-wrap gap-x-3 gap-y-0.5'>
                   <span>
@@ -2564,6 +2632,264 @@ const UpdateGuide = ({
   );
 };
 
+// 私人网盘配置组件
+const PanConfigComponent = ({
+  config,
+  refreshConfig,
+}: {
+  config: AdminConfig | null;
+  refreshConfig: () => Promise<void>;
+}) => {
+  const [panSettings, setPanSettings] = useState<PanConfig>({
+    enabled: false,
+    openlistUrl: '',
+    openlistToken: '',
+    rootPath: '/',
+  });
+  const [showToken, setShowToken] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (config?.PanConfig) {
+      setPanSettings({
+        enabled: Boolean(config.PanConfig.enabled),
+        openlistUrl: config.PanConfig.openlistUrl || '',
+        openlistToken: config.PanConfig.openlistToken || '',
+        rootPath: config.PanConfig.rootPath || '/',
+      });
+    }
+  }, [config]);
+
+  const handleTestConnection = async () => {
+    if (!panSettings.openlistUrl.trim()) {
+      showError('请先填写 OpenList / AList 接口地址');
+      return;
+    }
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/admin/pan/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(panSettings),
+      });
+      const data = await res.json();
+      setTestResult({
+        ok: data.ok,
+        message: data.message || (data.ok ? '连接成功' : '连接失败'),
+      });
+      if (data.ok) {
+        showSuccess(data.message || '连接测试成功！');
+      } else {
+        showError(data.message || '连接失败，请检查服务地址与Token');
+      }
+    } catch (err: any) {
+      setTestResult({
+        ok: false,
+        message: err?.message || '测试请求发送失败',
+      });
+      showError(err?.message || '网络异常');
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const res = await fetch('/api/admin/pan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(panSettings),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showSuccess('网盘配置保存成功');
+        await refreshConfig();
+      } else {
+        showError(data.error || '保存失败');
+      }
+    } catch (err: any) {
+      showError(err?.message || '保存异常');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSave} className='space-y-6'>
+      <div className='bg-white dark:bg-gray-800 rounded-lg p-4 sm:p-6 border border-gray-200 dark:border-gray-700 space-y-4'>
+        {/* 功能开关 */}
+        <div className='flex items-center justify-between py-2 border-b border-gray-100 dark:border-gray-700/60'>
+          <div>
+            <label className='text-sm font-medium text-gray-900 dark:text-gray-100'>
+              启用私人网盘影库
+            </label>
+            <p className='text-xs text-gray-500 dark:text-gray-400 mt-0.5'>
+              对接自建 OpenList / AList v3
+              API。开启且授权后将在导航栏显示「网盘」入口。
+            </p>
+          </div>
+          <input
+            type='checkbox'
+            checked={panSettings.enabled}
+            onChange={(e) =>
+              setPanSettings((prev) => ({ ...prev, enabled: e.target.checked }))
+            }
+            className='h-5 w-5 rounded border-gray-300 text-green-600 focus:ring-green-500 dark:border-gray-600 dark:bg-gray-700'
+          />
+        </div>
+
+        {/* 接口地址 */}
+        <div>
+          <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1'>
+            OpenList / AList 接口地址 <span className='text-red-500'>*</span>
+          </label>
+          <input
+            type='text'
+            placeholder='例如 http://openlist:5244 或 http://127.0.0.1:5244'
+            value={panSettings.openlistUrl}
+            onChange={(e) =>
+              setPanSettings((prev) => ({
+                ...prev,
+                openlistUrl: e.target.value,
+              }))
+            }
+            className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-green-500 dark:bg-gray-700 dark:text-white text-sm'
+          />
+          <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+            可填写 Docker 内网名（如
+            http://openlist:5244）、本机地址或远程域名。严禁下发给普通用户前端。
+          </p>
+        </div>
+
+        {/* API Token */}
+        <div>
+          <div className='flex items-center justify-between mb-1'>
+            <label className='block text-sm font-medium text-gray-700 dark:text-gray-300'>
+              API 访问令牌 (Token)
+            </label>
+            <button
+              type='button'
+              onClick={() => setShowToken(!showToken)}
+              className='text-xs text-green-600 hover:text-green-700 dark:text-green-400'
+            >
+              {showToken ? '隐藏' : '显示'}
+            </button>
+          </div>
+          <input
+            type={showToken ? 'text' : 'password'}
+            placeholder='若 AList 开启了认证请输入 Token（留空则不覆盖已保存的Token）'
+            value={panSettings.openlistToken}
+            onChange={(e) =>
+              setPanSettings((prev) => ({
+                ...prev,
+                openlistToken: e.target.value,
+              }))
+            }
+            className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-green-500 dark:bg-gray-700 dark:text-white text-sm font-mono'
+          />
+          <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+            可在 AList
+            管理后台「设置」-「其他」中查看或生成。此令牌由服务端严格保密。
+          </p>
+        </div>
+
+        {/* 根目录路径 */}
+        <div>
+          <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1'>
+            挂载根目录路径
+          </label>
+          <input
+            type='text'
+            placeholder='例如 / 或 /夸克影视'
+            value={panSettings.rootPath}
+            onChange={(e) =>
+              setPanSettings((prev) => ({ ...prev, rootPath: e.target.value }))
+            }
+            className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-green-500 dark:bg-gray-700 dark:text-white text-sm'
+          />
+          <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+            限制用户仅能在此目录下浏览与播放视频，后端强校验防止穿越。根目录填「/」表示可访问全盘。
+          </p>
+        </div>
+
+        {/* 测试连接反馈面板 */}
+        {testResult && (
+          <div
+            className={`p-3 rounded-md text-xs sm:text-sm ${
+              testResult.ok
+                ? 'bg-green-50 dark:bg-green-900/30 text-green-800 dark:text-green-300 border border-green-200 dark:border-green-800'
+                : 'bg-red-50 dark:bg-red-900/30 text-red-800 dark:text-red-300 border border-red-200 dark:border-red-800'
+            }`}
+          >
+            {testResult.message}
+          </div>
+        )}
+
+        {/* 302 客户端直连配置指南 */}
+        <div className='p-4 bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/80 dark:border-emerald-800/60 rounded-xl text-xs sm:text-sm text-emerald-900 dark:text-emerald-200 space-y-1.5'>
+          <div className='font-bold flex items-center gap-1.5 text-emerald-800 dark:text-emerald-300'>
+            <Info className='w-4 h-4 shrink-0' />
+            网盘 302 客户端直连配置指南（0 服务器流量消耗）
+          </div>
+          <p className='text-gray-600 dark:text-gray-300 leading-relaxed text-xs'>
+            为确保用户拉取视频流时不消耗你服务器/NAS的上行带宽，请在 AList
+            管理后台「存储」中将挂载的网盘配置为 302 直连：
+            <br />
+            1. <b>关闭「Web 代理 (Web Proxy)」</b>（不勾选）
+            <br />
+            2. <b>「WebDAV 策略」选择为「302 重定向 (302_redirect)」</b>
+            <br />
+            配置后，NovaTV
+            播放器和外部播放器（PotPlayer/VLC等）将直接对接网盘官方
+            CDN，跑满用户宽带，且 0 经过服务器中转。
+          </p>
+        </div>
+
+        {/* 操作按钮区 */}
+        <div className='flex flex-wrap items-center gap-3 pt-2'>
+          <button
+            type='button'
+            disabled={testing}
+            onClick={handleTestConnection}
+            className='inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md shadow-sm text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none transition-colors disabled:opacity-50'
+          >
+            {testing ? (
+              <>
+                <Loader2 className='animate-spin -ml-1 mr-2 h-4 w-4' />
+                正在测试连接...
+              </>
+            ) : (
+              '测试连接与目录可读性'
+            )}
+          </button>
+          <button
+            type='submit'
+            disabled={saving}
+            className='inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none transition-colors disabled:opacity-50'
+          >
+            {saving ? (
+              <>
+                <Loader2 className='animate-spin -ml-1 mr-2 h-4 w-4' />
+                保存中...
+              </>
+            ) : (
+              '保存网盘配置'
+            )}
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+};
+
 const SystemUpdateTab = () => {
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState<UpdateCheckResult | null>(
@@ -2971,6 +3297,7 @@ function AdminPageClient() {
     videoSource: false,
     siteConfig: false,
     categoryConfig: false,
+    panConfig: false,
     systemUpdate: false,
   });
 
@@ -3142,6 +3469,21 @@ function AdminPageClient() {
               onToggle={() => toggleTab('categoryConfig')}
             >
               <CategoryConfig config={config} refreshConfig={fetchConfig} />
+            </CollapsibleTab>
+
+            {/* 私人网盘配置标签 */}
+            <CollapsibleTab
+              title='私人网盘配置'
+              icon={
+                <HardDrive
+                  size={20}
+                  className='text-gray-600 dark:text-gray-400'
+                />
+              }
+              isExpanded={expandedTabs.panConfig}
+              onToggle={() => toggleTab('panConfig')}
+            >
+              <PanConfigComponent config={config} refreshConfig={fetchConfig} />
             </CollapsibleTab>
 
             {/* 系统更新标签(仅站长) */}

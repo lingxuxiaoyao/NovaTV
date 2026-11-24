@@ -1,9 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { Heart, Link, PlayCircleIcon, Trash } from 'lucide-react';
+import { HardDrive, Heart, Link, PlayCircleIcon, Trash } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import Swal from 'sweetalert2';
 
 import {
   deleteFavorite,
@@ -195,13 +196,41 @@ export default function VideoCard({
     [from, actualSource, actualId, onDelete]
   );
 
-  const handleClick = useCallback(() => {
+  const handleClick = useCallback(async () => {
     if (from === 'douban') {
       router.push(
         `/play?title=${encodeURIComponent(actualTitle.trim())}${
           actualYear ? `&year=${actualYear}` : ''
         }${actualSearchType ? `&stype=${actualSearchType}` : ''}`
       );
+    } else if (actualSource === 'pan' && actualId) {
+      // 私人网盘视频：跳转至网盘专属播放页
+      // 鉴权前置检查：若无网盘权限，禁止跳转回看
+      try {
+        const res = await fetch('/api/pan/status');
+        const data = await res.json().catch(() => ({}));
+        if (!data?.enabled || !data?.allowPan) {
+          Swal.fire({
+            icon: 'warning',
+            title: '无访问权限',
+            text: '该视频来自私人网盘，您当前未被授权访问网盘影库，无法继续播放。',
+            confirmButtonText: '确定',
+            confirmButtonColor: '#16a34a',
+          });
+          return;
+        }
+      } catch {
+        Swal.fire({
+          icon: 'error',
+          title: '校验失败',
+          text: '权限校验异常，无法打开私人网盘视频。',
+          confirmButtonText: '确定',
+          confirmButtonColor: '#16a34a',
+        });
+        return;
+      }
+
+      router.push(`/pan/play?path=${encodeURIComponent(actualId)}`);
     } else if (actualSource && actualId) {
       router.push(
         `/play?source=${actualSource}&id=${actualId}&title=${encodeURIComponent(
@@ -277,14 +306,37 @@ export default function VideoCard({
         {/* 骨架屏 */}
         {!isLoading && <ImagePlaceholder aspectRatio='aspect-[2/3]' />}
         {/* 图片 */}
-        <Image
-          src={processImageUrl(actualPoster)}
-          alt={actualTitle}
-          fill
-          className='object-cover'
-          referrerPolicy='no-referrer'
-          onLoadingComplete={() => setIsLoading(true)}
-        />
+        {actualPoster ? (
+          <Image
+            src={processImageUrl(actualPoster)}
+            alt={actualTitle}
+            fill
+            className='object-cover'
+            referrerPolicy='no-referrer'
+            onLoadingComplete={() => setIsLoading(true)}
+          />
+        ) : actualSource === 'pan' ? (
+          <div className='absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-emerald-950 via-slate-900 to-black p-3 text-center'>
+            <div className='w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mb-2 group-hover:scale-110 transition-transform duration-300 shadow-inner'>
+              <HardDrive size={24} />
+            </div>
+            <span className='text-xs font-bold text-emerald-300 line-clamp-2 px-1 leading-snug'>
+              {actualTitle}
+            </span>
+            <span className='text-[10px] text-gray-400 mt-1 font-mono'>
+              私人网盘
+            </span>
+          </div>
+        ) : (
+          <Image
+            src={processImageUrl(actualPoster)}
+            alt={actualTitle}
+            fill
+            className='object-cover'
+            referrerPolicy='no-referrer'
+            onLoadingComplete={() => setIsLoading(true)}
+          />
+        )}
 
         {/* 悬浮遮罩 */}
         <div className='absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 transition-opacity duration-300 ease-in-out group-hover:opacity-100' />
@@ -329,6 +381,13 @@ export default function VideoCard({
         )}
 
         {/* 徽章 */}
+        {actualSource === 'pan' && (
+          <div className='absolute top-2 left-2 z-20 flex items-center gap-1 bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-[11px] font-bold px-2 py-0.5 rounded-md shadow-lg backdrop-blur-sm transition-transform duration-300 ease-out group-hover:scale-105'>
+            <HardDrive size={12} className='shrink-0' />
+            <span>网盘</span>
+          </div>
+        )}
+
         {config.showRating && rate && (
           <div className='absolute top-2 right-2 bg-pink-500 text-white text-xs font-bold w-7 h-7 rounded-full flex items-center justify-center shadow-md transition-all duration-300 ease-out group-hover:scale-110'>
             {rate}
@@ -381,11 +440,18 @@ export default function VideoCard({
             <div className='absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-800'></div>
           </div>
         </div>
-        {config.showSourceName && source_name && (
+        {config.showSourceName && (
           <span className='block text-xs text-gray-500 dark:text-gray-400 mt-1'>
-            <span className='inline-block border rounded px-2 py-0.5 border-gray-500/60 dark:border-gray-400/60 transition-all duration-300 ease-in-out group-hover:border-green-500/60 group-hover:text-green-600 dark:group-hover:text-green-400'>
-              {source_name}
-            </span>
+            {actualSource === 'pan' ? (
+              <span className='inline-flex items-center gap-1 border rounded px-2 py-0.5 border-emerald-500/60 text-emerald-600 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/30 font-semibold text-xs'>
+                <HardDrive size={11} />
+                {source_name || '私人网盘'}
+              </span>
+            ) : source_name ? (
+              <span className='inline-block border rounded px-2 py-0.5 border-gray-500/60 dark:border-gray-400/60 transition-all duration-300 ease-in-out group-hover:border-green-500/60 group-hover:text-green-600 dark:group-hover:text-green-400'>
+                {source_name}
+              </span>
+            ) : null}
           </span>
         )}
       </div>

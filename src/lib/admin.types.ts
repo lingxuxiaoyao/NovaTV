@@ -1,3 +1,10 @@
+export interface PanConfig {
+  enabled: boolean;
+  openlistUrl: string;
+  openlistToken: string;
+  rootPath: string;
+}
+
 export interface AdminConfig {
   SiteConfig: {
     SiteName: string;
@@ -15,6 +22,7 @@ export interface AdminConfig {
       role: 'user' | 'admin' | 'owner';
       banned?: boolean;
       device_limit?: number; // 登录设备数量上限（0或缺省 = 不限制）
+      allowPan?: boolean; // 私人网盘权限（owner/admin 默认有，user 需授权）
     }[];
   };
   SourceConfig: {
@@ -32,6 +40,7 @@ export interface AdminConfig {
     from: 'config' | 'custom';
     disabled?: boolean;
   }[];
+  PanConfig?: PanConfig;
 }
 
 export interface AdminConfigResult {
