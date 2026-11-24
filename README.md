@@ -143,6 +143,9 @@ docker pull ghcr.io/lingxuxiaoyao/novatv:latest
 # 运行容器
 # -d: 后台运行  -p: 映射端口 3000 -> 3000
 docker run -d --name novatv -p 3000:3000 --env PASSWORD=your_password ghcr.io/lingxuxiaoyao/novatv:latest
+
+# 如需搭配 OpenList 私人网盘影库（可选）
+# docker run -d --name openlist -p 5244:5244 -v ./data/openlist:/opt/openlist/data --restart unless-stopped openlistteam/openlist:latest
 ```
 
 访问 `http://服务器 IP:3000` 即可。（需自行到服务器控制台放通 `3000` 端口）
@@ -163,35 +166,19 @@ services:
       - '3000:3000'
     environment:
       - PASSWORD=your_password
-      # --- 私人网盘 (OpenList / AList) 预置配置（可选，也可在管理后台直接配置） ---
-      # - PAN_ENABLED=true                     # 开启私人网盘影库
-      # - OPENLIST_URL=http://alist:5244       # AList 地址（同网络直接使用容器名）
-      # - OPENLIST_TOKEN=your_alist_token      # AList 管理员 Token（在 AList 后台「设置」获取）
-      # - PAN_ROOT_PATH=/                      # 挂载根路径，默认 /
     # 如需自定义配置，可挂载文件
     # volumes:
     #   - ./config.json:/app/config.json:ro
 
-  # --- 私人网盘影库服务 (OpenList / AList v3，可选按需启用) ---
-  # alist:
-  #   image: xhofe/alist:latest
-  #   container_name: alist
+  # 如需挂载 OpenList 私人网盘影库（初始密码：docker exec -it openlist ./openlist admin）
+  # openlist:
+  #   image: openlistteam/openlist:latest
+  #   container_name: openlist
   #   restart: unless-stopped
   #   ports:
   #     - '5244:5244'
   #   volumes:
-  #     - ./data/alist:/opt/alist/data
-  #   environment:
-  #     - PUID=0
-  #     - PGID=0
-  #     - UMASK=022
-  #   # 【重要使用提示】：
-  #   # 1. 初始管理员密码：首次启动容器后，在宿主机执行 `docker exec -it alist ./alist admin` 查看账号密码
-  #   # 2. 开启 302 客户端直连（0 服务器流量占用）：进入 AList 管理后台添加网盘后，请在「存储」中编辑该网盘：
-  #   #    - 关闭「Web 代理 (Web Proxy)」（不勾选）
-  #   #    - 将「WebDAV 策略」更改为「302 重定向 (302_redirect)」
-  #   #    配置后播放器将直连网盘官方 CDN，跑满宽带且 0 经过服务器中转！
-  #   # 3. 开启搜索索引：进入 AList 后台「设置」->「索引」，将「搜索引擎」改为 database 并重建索引即可支持快速检索
+  #     - ./data/openlist:/opt/openlist/data
 ```
 
 ### Redis 版本（推荐，多账户数据隔离，跨设备同步）
@@ -210,16 +197,10 @@ services:
       - NEXT_PUBLIC_STORAGE_TYPE=redis
       - REDIS_URL=redis://novatv-redis:6379
       - NEXT_PUBLIC_ENABLE_REGISTER=true
-      # --- 私人网盘 (OpenList / AList) 预置配置（可选，也可在管理后台直接配置） ---
-      # - PAN_ENABLED=true                     # 开启私人网盘影库
-      # - OPENLIST_URL=http://novatv-alist:5244 # AList 服务地址（同网络直接使用容器名）
-      # - OPENLIST_TOKEN=your_alist_token      # AList 管理员 Token
-      # - PAN_ROOT_PATH=/                      # 挂载根路径，默认 /
     networks:
       - novatv-network
     depends_on:
       - novatv-redis
-      # - novatv-alist
     # 如需自定义配置，可挂载文件
     # volumes:
     #   - ./config.json:/app/config.json:ro
@@ -234,28 +215,17 @@ services:
     # volumes:
     #   - ./data:/data
 
-  # --- 私人网盘影库服务 (OpenList / AList v3，可选按需启用) ---
-  # novatv-alist:
-  #   image: xhofe/alist:latest
-  #   container_name: novatv-alist
+  # 如需挂载 OpenList 私人网盘影库（初始密码：docker exec -it openlist ./openlist admin）
+  # openlist:
+  #   image: openlistteam/openlist:latest
+  #   container_name: openlist
   #   restart: unless-stopped
   #   ports:
   #     - '5244:5244'
   #   volumes:
-  #     - ./data/alist:/opt/alist/data
+  #     - ./data/openlist:/opt/openlist/data
   #   networks:
   #     - novatv-network
-  #   environment:
-  #     - PUID=0
-  #     - PGID=0
-  #     - UMASK=022
-  #   # 【重要使用提示】：
-  #   # 1. 初始管理员密码：首次启动容器后，在宿主机执行 `docker exec -it novatv-alist ./alist admin` 查看账号密码
-  #   # 2. 开启 302 客户端直连（0 服务器流量占用）：进入 AList 管理后台添加网盘后，请在「存储」中编辑该网盘：
-  #   #    - 关闭「Web 代理 (Web Proxy)」（不勾选）
-  #   #    - 将「WebDAV 策略」更改为「302 重定向 (302_redirect)」
-  #   #    配置后播放器将直连网盘官方 CDN，跑满宽带且 0 经过服务器中转！
-  #   # 3. 开启搜索索引：进入 AList 后台「设置」->「索引」，将「搜索引擎」改为 database 并重建索引即可支持快速检索
 networks:
   novatv-network:
     driver: bridge
