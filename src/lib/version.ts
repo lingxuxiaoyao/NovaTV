@@ -4,7 +4,7 @@
 // 不能加 'use client'，否则服务端拿到的是 client reference 代理，
 // 调用 .slice() 等属性方法会抛 "Attempted to call ... from the server" 错误。
 
-const CURRENT_VERSION = '20261124122443';
+const CURRENT_VERSION = '20261124163211';
 
 // 版本检查结果枚举
 export enum UpdateStatus {

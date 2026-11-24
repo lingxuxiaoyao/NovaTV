@@ -413,33 +413,23 @@ export async function triggerUpdateLatest(): Promise<UpdateChannel> {
     const url = process.env.WATCHTOWER_API_URL;
     if (!url) throw new Error('WATCHTOWER_API_URL 未配置');
     const headers: Record<string, string> = {};
-    if (process.env.WATCHTOWER_API_TOKEN) {
-      headers.Authorization = `Bearer ${process.env.WATCHTOWER_API_TOKEN}`;
+    const token =
+      process.env.WATCHTOWER_API_TOKEN || process.env.WATCHTOWER_HTTP_API_TOKEN;
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
     }
-    try {
-      const res = await fetch(`${url.replace(/\/+$/, '')}/v1/update`, {
-        method: 'POST',
-        headers,
-        signal: AbortSignal.timeout(90000), // 镜像拉取与解压耗时较长，放宽到 90 秒
-      });
-      if (!res.ok) {
-        throw new Error(`Watchtower 更新请求失败: ${res.status}`);
-      }
-    } catch (e: any) {
-      const msg = String(e?.message || '');
-      // 若 Watchtower 已经在拉取并重启容器，可能导致连接超时或断开
-      // 只要不是明确鉴权失败，超时或断连通常意味着更新正在后台执行中
-      if (
-        msg.includes('aborted') ||
-        msg.includes('timeout') ||
-        msg.includes('ECONNRESET') ||
-        msg.includes('fetch failed')
-      ) {
-        console.log('Watchtower 更新请求超时或连接重置(镜像正在拉取中):', msg);
-        return 'watchtower';
-      }
-      throw e;
-    }
+    // 异步触发 Watchtower 更新，避免同步等待导致的连接中断与 502 Bad Gateway
+    // Watchtower 在接收到 /v1/update 请求后会在后台执行镜像拉取与容器重建，
+    // 若同步 await 其完成，novatv-core 容器在更新过程中被停止会导致当前 HTTP 连接断开，
+    // 从而使上游反向代理（如 Cloudflare / Nginx）返回 502 Bad Gateway 错误。
+    fetch(`${url.replace(/\/+$/, '')}/v1/update`, {
+      method: 'POST',
+      headers,
+      signal: AbortSignal.timeout(120000),
+    }).catch((e) => {
+      console.error('Watchtower 后台更新触发异常:', e?.message || e);
+    });
+
     return 'watchtower';
   }
 
@@ -467,7 +457,10 @@ export async function triggerUpdateLatest(): Promise<UpdateChannel> {
   }
 
   // docker 通道:无 Watchtower 时,直接通过 sock 拉 latest 并准备重建
-  await prepareSwitchVersion('latest');
+  const { helperId } = await prepareSwitchVersion('latest');
+  setTimeout(() => {
+    startHelper(helperId).catch((e) => console.error('启动辅助容器失败:', e));
+  }, 500);
   return 'docker';
 }
 

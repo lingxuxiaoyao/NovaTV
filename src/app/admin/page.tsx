@@ -2957,13 +2957,16 @@ const SystemUpdateTab = () => {
       clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
     }
+    setCheckError(null);
     setPolling(true);
     setPollMsg(`${actionLabel}已触发,站点将短暂重启,正在等待新版本上线…`);
     let tries = 0;
     const timer = setInterval(async () => {
       tries++;
       try {
-        const res = await fetch('/api/admin/update?action=check');
+        const res = await fetch('/api/admin/update?action=check', {
+          cache: 'no-store',
+        });
         if (res.ok) {
           const data = await res.json();
           if (data.currentVersion && data.currentVersion !== baseline) {
@@ -2979,13 +2982,13 @@ const SystemUpdateTab = () => {
       } catch {
         /* 重启期间请求失败属正常,继续轮询 */
       }
-      if (tries >= 30) {
+      if (tries >= 36) {
         clearInterval(timer);
         pollTimerRef.current = null;
         setPolling(false);
         setPollMsg('迟迟未检测到新版本上线,请检查更新通道日志后手动刷新');
       }
-    }, 8000);
+    }, 5000);
     pollTimerRef.current = timer;
   };
 
@@ -3007,14 +3010,28 @@ const SystemUpdateTab = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'updateLatest' }),
       });
+      // 容错处理：若上游反代在容器重启期间返回 502/503/504，说明容器正在重启，转入轮询
+      if ([502, 503, 504].includes(res.status)) {
+        pollForRestart(checkResult.currentVersion, '更新');
+        return;
+      }
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || '更新失败');
+      if (!res.ok) {
+        const errMsg = String(data.error || '');
+        if (/502|503|504|bad gateway|gateway/i.test(errMsg)) {
+          pollForRestart(checkResult.currentVersion, '更新');
+          return;
+        }
+        throw new Error(errMsg || `更新失败 (${res.status})`);
+      }
       pollForRestart(checkResult.currentVersion, '更新');
     } catch (e) {
       const msg = e instanceof Error ? e.message : '更新失败';
-      // 容错处理：若因容器中途重启或拉取镜像耗时触发超时或网络中断，说明更新其实已经在进行中，自动转入探测轮询
+      // 容错处理：若因容器中途重启或拉取镜像耗时触发超时、网络中断或网关断开，说明更新其实已经在进行中，自动转入探测轮询
       if (
-        /timeout|aborted|failed to fetch|networkerror|load failed/i.test(msg)
+        /timeout|aborted|failed to fetch|networkerror|load failed|502|503|504|bad gateway|gateway/i.test(
+          msg
+        )
       ) {
         pollForRestart(checkResult.currentVersion, '更新');
       } else {
@@ -3043,13 +3060,27 @@ const SystemUpdateTab = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'updateVersion', version: v.tag }),
       });
+      // 容错处理：若上游反代在容器重启期间返回 502/503/504，说明容器正在重启，转入轮询
+      if ([502, 503, 504].includes(res.status)) {
+        pollForRestart(checkResult.currentVersion, '版本切换');
+        return;
+      }
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || '切换失败');
+      if (!res.ok) {
+        const errMsg = String(data.error || '');
+        if (/502|503|504|bad gateway|gateway/i.test(errMsg)) {
+          pollForRestart(checkResult.currentVersion, '版本切换');
+          return;
+        }
+        throw new Error(errMsg || `切换失败 (${res.status})`);
+      }
       pollForRestart(checkResult.currentVersion, '版本切换');
     } catch (e) {
       const msg = e instanceof Error ? e.message : '切换失败';
       if (
-        /timeout|aborted|failed to fetch|networkerror|load failed/i.test(msg)
+        /timeout|aborted|failed to fetch|networkerror|load failed|502|503|504|bad gateway|gateway/i.test(
+          msg
+        )
       ) {
         pollForRestart(checkResult.currentVersion, '版本切换');
       } else {
